@@ -29,15 +29,55 @@ jobs:
         run: |
           python -m PyInstaller --clean --noconfirm KAFIA_NET_CONTROL_PRO.spec
 
-      - name: Package
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+
+      - name: Create Installer script
+        shell: pwsh
+        run: |
+          @'
+          [Setup]
+          AppName=KAFIA NET CONTROL PRO
+          AppVersion=1.0.0
+          DefaultDirName={autopf}\KAFIA NET CONTROL PRO
+          DefaultGroupName=KAFIA NET CONTROL PRO
+          OutputDir=installer
+          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_Setup
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesInstallIn64BitMode=x64compatible
+          PrivilegesRequired=admin
+          Uninstallable=yes
+
+          [Files]
+          Source: "dist\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA NET CONTROL PRO.exe"
+
+          [Run]
+          Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -Path installer.iss -Encoding UTF8
+
+      - name: Build Installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Package Portable
         shell: pwsh
         run: |
           Compress-Archive `
             -Path "dist/KAFIA_NET_CONTROL_PRO" `
-            -DestinationPath "KAFIA_NET_CONTROL_PRO-Windows.zip"
+            -DestinationPath "KAFIA_NET_CONTROL_PRO-Windows-Portable.zip"
 
-      - name: Upload artifact
+      - name: Upload Windows packages
         uses: actions/upload-artifact@v4
         with:
           name: KAFIA_NET_CONTROL_PRO-Windows
-          path: KAFIA_NET_CONTROL_PRO-Windows.zip
+          path: |
+            installer/KAFIA_NET_CONTROL_PRO_Setup.exe
+            KAFIA_NET_CONTROL_PRO-Windows-Portable.zip
