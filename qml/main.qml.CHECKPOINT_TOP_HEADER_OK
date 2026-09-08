@@ -1,0 +1,491 @@
+﻿import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import "pages"
+
+ApplicationWindow {
+    id: window
+
+    visible: true
+
+    width: 1500
+    height: 900
+
+    minimumWidth: 1100
+    minimumHeight: 700
+
+    title: "KAFIA NET CONTROL PRO"
+
+    color: "#070910"
+
+    Row {
+        anchors.fill: parent
+        spacing: 0
+
+        // ============================================================
+        // SIDEBAR
+        // ============================================================
+
+        Rectangle {
+            id: sidebar
+
+            width: 230
+            height: parent.height
+
+            color: "#0D1018"
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: 18
+                spacing: 10
+
+                // BRAND
+                Item {
+                    width: parent.width
+                    height: 72
+
+                    Column {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+
+                        Text {
+                            text: "KAFIA NET"
+                            color: "#00D9FF"
+                            font.pixelSize: 27
+                            font.bold: true
+                        }
+
+                        Text {
+                            text: "CONTROL PRO"
+                            color: "#727A8D"
+                            font.pixelSize: 13
+                            font.bold: true
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: "#242936"
+                }
+
+                Item {
+                    width: 1
+                    height: 8
+                }
+
+                // ====================================================
+                // MENU
+                // ====================================================
+
+                Button {
+                    id: gamesButton
+                    width: parent.width
+                    height: 48
+
+                    text: "🎮   الألعاب"
+
+                    background: Rectangle {
+                        radius: 12
+                        color: "#17202B"
+                        border.color: "#00D9FF"
+                        border.width: 1
+                    }
+
+                    contentItem: Text {
+                        text: gamesButton.text
+                        color: "#FFFFFF"
+                        font.pixelSize: 15
+                        font.bold: true
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignRight
+                        rightPadding: 18
+                    }
+                }
+
+                Button {
+                    width: parent.width
+                    height: 48
+
+                    text: "📂   نقل الملفات"
+
+                    background: Rectangle {
+                        radius: 12
+                        color: "#11151E"
+                    }
+
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#AAB2C2"
+                        font.pixelSize: 15
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignRight
+                        rightPadding: 18
+                    }
+                }
+
+                Button {
+                    width: parent.width
+                    height: 48
+
+                    text: "📦   التثبيت"
+
+                    background: Rectangle {
+                        radius: 12
+                        color: "#11151E"
+                    }
+
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#AAB2C2"
+                        font.pixelSize: 15
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignRight
+                        rightPadding: 18
+                    }
+                }
+
+                Button {
+                    width: parent.width
+                    height: 48
+
+                    text: "📜   سجل النقل"
+
+                    background: Rectangle {
+                        radius: 12
+                        color: "#11151E"
+                    }
+
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#AAB2C2"
+                        font.pixelSize: 15
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignRight
+                        rightPadding: 18
+                    }
+                }
+
+                Button {
+                    width: parent.width
+                    height: 48
+
+                    text: "💾   التخزين"
+
+                    background: Rectangle {
+                        radius: 12
+                        color: "#11151E"
+                    }
+
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#AAB2C2"
+                        font.pixelSize: 15
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignRight
+                        rightPadding: 18
+                    }
+                }
+
+                Button {
+                    width: parent.width
+                    height: 48
+
+                    text: "⚙   الإعدادات"
+
+                    background: Rectangle {
+                        radius: 12
+                        color: "#11151E"
+                    }
+
+                    contentItem: Text {
+                        text: parent.text
+                        color: "#AAB2C2"
+                        font.pixelSize: 15
+                        verticalAlignment: Text.AlignVCenter
+                        horizontalAlignment: Text.AlignRight
+                        rightPadding: 18
+                    }
+                }
+
+                Item {
+                    Layout.fillHeight: true
+                    width: 1
+                    height: 1
+                }
+
+                // CONNECTION STATUS
+                Rectangle {
+                    width: parent.width
+                    height: 76
+
+                    radius: 14
+                    color: "#10151F"
+                    border.color: "#202938"
+                    border.width: 1
+
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 12
+                        spacing: 6
+
+                        Row {
+                            spacing: 8
+
+                            Rectangle {
+                                width: 9
+                                height: 9
+                                radius: 5
+                                color: "#25E58A"
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            Text {
+                                text: "WIRELESS"
+                                color: "#FFFFFF"
+                                font.pixelSize: 12
+                                font.bold: true
+                            }
+                        }
+
+                        Text {
+                            text: "SERVER06 متصل"
+                            color: "#727A8D"
+                            font.pixelSize: 11
+                        }
+
+                        Text {
+                            text: "جاهز لنقل الألعاب"
+                            color: "#25E58A"
+                            font.pixelSize: 10
+                        }
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // MAIN AREA
+        // ============================================================
+
+        Rectangle {
+            width: parent.width - sidebar.width
+            height: parent.height
+
+            color: "#070910"
+
+            Item {
+                anchors.fill: parent
+
+                // ====================================================
+                // TOP HEADER
+                // ====================================================
+
+                Rectangle {
+                    id: header
+
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+
+                    height: 90
+
+                    color: "#0B0E16"
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+
+                        height: 1
+
+                        color: "#1D2430"
+                    }
+
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 30
+                        anchors.rightMargin: 30
+
+                        spacing: 20
+
+                        // TITLE
+                        Column {
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 3
+
+                            Text {
+                                text: "الألعاب"
+
+                                color: "#FFFFFF"
+
+                                font.pixelSize: 28
+                                font.bold: true
+                            }
+
+                            Text {
+                                text: "إدارة ونقل ألعاب الأجهزة"
+
+                                color: "#697286"
+
+                                font.pixelSize: 12
+                            }
+                        }
+
+                        Item {
+                            width: 1
+                            height: 1
+                            Layout.fillWidth: true
+                        }
+
+                        // SERVER STATUS
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            width: 150
+                            height: 48
+
+                            radius: 12
+
+                            color: "#101721"
+
+                            border.color: "#1F2B39"
+                            border.width: 1
+
+                            Row {
+                                anchors.fill: parent
+                                anchors.margins: 10
+
+                                spacing: 9
+
+                                Rectangle {
+                                    width: 10
+                                    height: 10
+                                    radius: 5
+
+                                    anchors.verticalCenter: parent.verticalCenter
+
+                                    color: "#25E58A"
+                                }
+
+                                Column {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 2
+
+                                    Text {
+                                        text: "WIRELESS"
+
+                                        color: "#FFFFFF"
+
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                    }
+
+                                    Text {
+                                        text: "متصل"
+
+                                        color: "#25E58A"
+
+                                        font.pixelSize: 10
+                                    }
+                                }
+                            }
+                        }
+
+                        // USB STATUS
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            width: 150
+                            height: 48
+
+                            radius: 12
+
+                            color: "#101721"
+
+                            border.color: "#1F2B39"
+                            border.width: 1
+
+                            Row {
+                                anchors.fill: parent
+                                anchors.margins: 10
+
+                                spacing: 9
+
+                                Rectangle {
+                                    width: 10
+                                    height: 10
+                                    radius: 5
+
+                                    anchors.verticalCenter: parent.verticalCenter
+
+                                    color: "#00D9FF"
+                                }
+
+                                Column {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 2
+
+                                    Text {
+                                        text: "USB"
+
+                                        color: "#FFFFFF"
+
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                    }
+
+                                    Text {
+                                        text: "جاهز"
+
+                                        color: "#00D9FF"
+
+                                        font.pixelSize: 10
+                                    }
+                                }
+                            }
+                        }
+
+                        // SETTINGS BUTTON
+                        Button {
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            width: 48
+                            height: 48
+
+                            text: "⚙"
+
+                            background: Rectangle {
+                                radius: 12
+                                color: "#111722"
+                                border.color: "#222B38"
+                                border.width: 1
+                            }
+
+                            contentItem: Text {
+                                text: "⚙"
+                                color: "#AAB2C2"
+                                font.pixelSize: 20
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
+                }
+
+                // ====================================================
+                // DASHBOARD
+                // ====================================================
+
+                Dashboard {
+                    anchors.top: header.bottom
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                }
+            }
+        }
+    }
+}

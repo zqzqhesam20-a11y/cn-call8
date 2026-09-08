@@ -1,0 +1,182 @@
+﻿import QtQuick
+import QtQuick.Controls
+import "pages"
+
+ApplicationWindow {
+
+    id: window
+
+    visible: true
+
+    width: 1500
+    height: 900
+
+    minimumWidth: 1100
+    minimumHeight: 700
+
+    title: "KAFIA NET CONTROL PRO"
+
+    color: "#070910"
+
+
+    Row {
+
+        anchors.fill: parent
+
+        spacing: 0
+
+
+        Rectangle {
+
+            width: 230
+
+            height: parent.height
+
+            color: "#0D1018"
+
+
+            Column {
+
+                anchors.fill: parent
+
+                anchors.margins: 20
+
+                spacing: 12
+
+
+                Text {
+
+                    text: "KAFIA NET"
+
+                    color: "#00D9FF"
+
+                    font.pixelSize: 27
+
+                    font.bold: true
+                }
+
+
+                Text {
+
+                    text: "CONTROL PRO"
+
+                    color: "#7D8496"
+
+                    font.pixelSize: 14
+                }
+
+
+                Rectangle {
+
+                    width: parent.width
+
+                    height: 1
+
+                    color: "#242936"
+                }
+
+
+                Button {
+                    text: "🎮  الألعاب"
+                    width: parent.width
+                }
+
+
+                Button {
+                    text: "📂  نقل الملفات"
+                    width: parent.width
+                }
+
+
+                Button {
+                    text: "📦  التثبيت"
+                    width: parent.width
+                }
+
+
+                Button {
+                    text: "📜  سجل النقل"
+                    width: parent.width
+                }
+
+
+                Button {
+                    text: "💾  التخزين"
+                    width: parent.width
+                }
+
+
+                Button {
+                    text: "⚙  الإعدادات"
+                    width: parent.width
+                }
+
+            }
+        }
+
+
+        Rectangle {
+
+            width: parent.width - 230
+
+            height: parent.height
+
+            color: "#070910"
+
+
+            Item {
+
+                anchors.fill: parent
+
+
+                Rectangle {
+
+                    id: header
+
+                    x: 0
+
+                    y: 0
+
+                    width: parent.width
+
+                    height: 90
+
+                    color: "#0B0E16"
+
+
+                    Text {
+
+                        anchors.left: parent.left
+
+                        anchors.leftMargin: 30
+
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        text: "الألعاب"
+
+                        color: "white"
+
+                        font.pixelSize: 30
+
+                        font.bold: true
+                    }
+
+                }
+
+
+                Dashboard {
+
+                    x: 0
+
+                    y: 90
+
+                    width: parent.width
+
+                    height: parent.height - 90
+                }
+
+            }
+        }
+
+    }
+}

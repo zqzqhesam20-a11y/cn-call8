@@ -1,0 +1,547 @@
+﻿import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import "../components"
+
+Item {
+
+    id: root
+
+    anchors.fill: parent
+
+    Rectangle {
+
+        anchors.fill: parent
+
+        color: "#070910"
+
+    }
+
+
+    Flickable {
+
+        anchors.fill: parent
+
+        anchors.margins: 30
+
+        contentWidth: width
+
+        contentHeight: contentColumn.height + 30
+
+        clip: true
+
+
+        Column {
+
+            id: contentColumn
+
+            width: parent.width
+
+            spacing: 22
+
+
+            // =====================================================
+            // DASHBOARD SUMMARY
+            // =====================================================
+
+            RowLayout {
+
+                width: parent.width
+
+                height: 100
+
+                spacing: 16
+
+
+                // =================================================
+                // GAMES COUNT
+                // =================================================
+
+                Rectangle {
+
+                    Layout.fillWidth: true
+
+                    Layout.preferredHeight: 100
+
+                    radius: 16
+
+                    color: "#0D121B"
+
+                    border.width: 1
+
+                    border.color: "#202A38"
+
+
+                    Column {
+
+                        anchors.fill: parent
+
+                        anchors.margins: 18
+
+                        spacing: 7
+
+
+                        Text {
+
+                            text: "الألعاب المتاحة"
+
+                            color: "#727C90"
+
+                            font.pixelSize: 12
+
+                        }
+
+
+                        Row {
+
+                            spacing: 10
+
+
+                            Text {
+
+                                text: "7"
+
+                                color: "#FFFFFF"
+
+                                font.pixelSize: 28
+
+                                font.bold: true
+
+                            }
+
+
+                            Text {
+
+                                text: "ألعاب"
+
+                                color: "#00D9FF"
+
+                                font.pixelSize: 12
+
+                                anchors.verticalCenter: parent.verticalCenter
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+
+                // =================================================
+                // WIRELESS
+                // =================================================
+
+                Rectangle {
+
+                    Layout.fillWidth: true
+
+                    Layout.preferredHeight: 100
+
+                    radius: 16
+
+                    color: "#0D1418"
+
+                    border.width: 1
+
+                    border.color: "#1C3740"
+
+
+                    Column {
+
+                        anchors.fill: parent
+
+                        anchors.margins: 18
+
+                        spacing: 7
+
+
+                        Text {
+
+                            text: "WIRELESS"
+
+                            color: "#00D9FF"
+
+                            font.pixelSize: 12
+
+                            font.bold: true
+
+                        }
+
+
+                        Row {
+
+                            spacing: 9
+
+
+                            Rectangle {
+
+                                width: 9
+
+                                height: 9
+
+                                radius: 5
+
+                                color: "#27D17F"
+
+                                anchors.verticalCenter: parent.verticalCenter
+
+                            }
+
+
+                            Text {
+
+                                text: "الخادم متصل"
+
+                                color: "#D6DCE7"
+
+                                font.pixelSize: 15
+
+                                font.bold: true
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+
+                // =================================================
+                // USB
+                // =================================================
+
+                Rectangle {
+
+                    Layout.fillWidth: true
+
+                    Layout.preferredHeight: 100
+
+                    radius: 16
+
+                    color: "#13130F"
+
+                    border.width: 1
+
+                    border.color: "#38301B"
+
+
+                    Column {
+
+                        anchors.fill: parent
+
+                        anchors.margins: 18
+
+                        spacing: 7
+
+
+                        Text {
+
+                            text: "USB"
+
+                            color: "#F0B44D"
+
+                            font.pixelSize: 12
+
+                            font.bold: true
+
+                        }
+
+
+                        Row {
+
+                            spacing: 9
+
+
+                            Rectangle {
+
+                                width: 9
+
+                                height: 9
+
+                                radius: 5
+
+                                color: "#F0B44D"
+
+                                anchors.verticalCenter: parent.verticalCenter
+
+                            }
+
+
+                            Text {
+
+                                text: "جاهز للنقل"
+
+                                color: "#D6DCE7"
+
+                                font.pixelSize: 15
+
+                                font.bold: true
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+
+                // =================================================
+                // DEVICE
+                // =================================================
+
+                Rectangle {
+
+                    Layout.fillWidth: true
+
+                    Layout.preferredHeight: 100
+
+                    radius: 16
+
+                    color: "#0D121B"
+
+                    border.width: 1
+
+                    border.color: "#202A38"
+
+
+                    Column {
+
+                        anchors.fill: parent
+
+                        anchors.margins: 18
+
+                        spacing: 7
+
+
+                        Text {
+
+                            text: "الجهاز"
+
+                            color: "#727C90"
+
+                            font.pixelSize: 12
+
+                        }
+
+
+                        Row {
+
+                            spacing: 9
+
+
+                            Rectangle {
+
+                                width: 9
+
+                                height: 9
+
+                                radius: 5
+
+                                color: "#27D17F"
+
+                                anchors.verticalCenter: parent.verticalCenter
+
+                            }
+
+
+                            Text {
+
+                                text: "ADB متصل"
+
+                                color: "#D6DCE7"
+
+                                font.pixelSize: 15
+
+                                font.bold: true
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+            }
+
+
+            // =====================================================
+            // SECTION HEADER
+            // =====================================================
+
+            RowLayout {
+
+                width: parent.width
+
+                height: 45
+
+
+                ColumnLayout {
+
+                    Layout.fillWidth: true
+
+                    spacing: 2
+
+
+                    Text {
+
+                        text: "مكتبة الألعاب"
+
+                        color: "#FFFFFF"
+
+                        font.pixelSize: 21
+
+                        font.bold: true
+
+                    }
+
+
+                    Text {
+
+                        text: "اختر اللعبة التي تريد نقلها أو تثبيتها"
+
+                        color: "#697386"
+
+                        font.pixelSize: 12
+
+                    }
+
+                }
+
+
+                Rectangle {
+
+                    Layout.preferredWidth: 120
+
+                    Layout.preferredHeight: 36
+
+                    radius: 9
+
+                    color: "#101720"
+
+                    border.width: 1
+
+                    border.color: "#21303A"
+
+
+                    Text {
+
+                        anchors.centerIn: parent
+
+                        text: "7 ألعاب"
+
+                        color: "#00D9FF"
+
+                        font.pixelSize: 12
+
+                        font.bold: true
+
+                    }
+
+                }
+
+            }
+
+
+            // =====================================================
+            // GAMES GRID
+            // =====================================================
+
+            Grid {
+
+                id: grid
+
+                width: parent.width
+
+                columns: width >= 1250 ? 4 : width >= 850 ? 3 : 2
+
+                spacing: 22
+
+
+                GameCard {
+
+                    gameName: "Fortnite"
+
+                    imageSource: "file:///D:/KAFIA_NET_CONTROL_PRO_PC/assets/games/fortnite.png"
+
+                    gameColor: "#2D8CFF"
+
+                }
+
+
+                GameCard {
+
+                    gameName: "Genshin Impact"
+
+                    imageSource: "file:///D:/KAFIA_NET_CONTROL_PRO_PC/assets/games/genshin.png"
+
+                    gameColor: "#8A5CFF"
+
+                }
+
+
+                GameCard {
+
+                    gameName: "eFootball"
+
+                    imageSource: "file:///D:/KAFIA_NET_CONTROL_PRO_PC/assets/games/efootball.png"
+
+                    gameColor: "#00B894"
+
+                }
+
+
+                GameCard {
+
+                    gameName: "Free Fire"
+
+                    imageSource: "file:///D:/KAFIA_NET_CONTROL_PRO_PC/assets/games/freefire.png"
+
+                    gameColor: "#FF9F1C"
+
+                }
+
+
+                GameCard {
+
+                    gameName: "PUBG Mobile"
+
+                    imageSource: "file:///D:/KAFIA_NET_CONTROL_PRO_PC/assets/games/pubg.png"
+
+                    gameColor: "#F5C542"
+
+                }
+
+
+                GameCard {
+
+                    gameName: "Call of Duty Mobile"
+
+                    imageSource: "file:///D:/KAFIA_NET_CONTROL_PRO_PC/assets/games/callofduty.png"
+
+                    gameColor: "#FF4D4D"
+
+                }
+
+
+                GameCard {
+
+                    gameName: "Grand Theft Auto"
+
+                    imageSource: "file:///D:/KAFIA_NET_CONTROL_PRO_PC/assets/games/gta.png"
+
+                    gameColor: "#9B59B6"
+
+                }
+
+            }
+
+        }
+
+    }
+
+}
