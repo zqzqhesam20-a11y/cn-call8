@@ -1,16 +1,37 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
 
-datas = [('qml', 'qml'), ('assets', 'assets'), ('ui', 'ui'), ('engine', 'engine'), ('games.json', '.')]
-binaries = [('platform-tools/adb.exe', 'platform-tools'), ('platform-tools/AdbWinApi.dll', 'platform-tools'), ('platform-tools/AdbWinUsbApi.dll', 'platform-tools')]
-hiddenimports = []
-tmp_ret = collect_all('PySide6')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+from PyInstaller.utils.hooks import collect_submodules
 
+datas = [
+    ("qml", "qml"),
+    ("assets", "assets"),
+    ("ui", "ui"),
+    ("engine", "engine"),
+    ("games.json", "."),
+]
+
+binaries = [
+    ("platform-tools/adb.exe", "platform-tools"),
+    ("platform-tools/AdbWinApi.dll", "platform-tools"),
+    ("platform-tools/AdbWinUsbApi.dll", "platform-tools"),
+]
+
+hiddenimports = [
+    "PySide6",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+]
+
+# Keep Python-side PySide6 submodules available without manually
+# collecting a second copy of the Qt binary tree.
+hiddenimports += collect_submodules("PySide6")
 
 a = Analysis(
-    ['app_qml.py'],
-    pathex=[],
+    ["app_qml.py"],
+    pathex=["."],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
@@ -21,6 +42,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -28,11 +50,11 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='KAFIA_NET_CONTROL_PRO',
+    name="KAFIA_NET_CONTROL_PRO",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -40,12 +62,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
-    name='KAFIA_NET_CONTROL_PRO',
+    name="KAFIA_NET_CONTROL_PRO",
 )
