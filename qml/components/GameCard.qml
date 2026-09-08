@@ -8,53 +8,6 @@ Item {
     property string imageSource: ""
     property string gameColor: "#00D9FF"
 
-    property int transferProgress: 0
-    property string transferSpeed: "0 B/s"
-    property string transferEta: "00:00"
-    property bool transferring: false
-    property bool transferPaused: false
-    property bool cancelRequested: false
-
-    Connections {
-        target: appController
-
-        function onTransferPercentChanged(percent) {
-            if (appController.currentGame === root.gameName) {
-
-                // Ignore late progress updates after Cancel.
-                if (root.cancelRequested)
-                    return
-
-                root.transferProgress = percent
-                root.transferring = percent < 100
-            }
-        }
-
-        function onTransferSpeedChanged(speed) {
-            if (appController.currentGame === root.gameName) {
-                root.transferSpeed = speed
-            }
-        }
-
-        function onTransferEtaChanged(eta) {
-            if (appController.currentGame === root.gameName) {
-                root.transferEta = eta
-            }
-        }
-
-        function onTransferFinished(success, message) {
-            if (appController.currentGame === root.gameName) {
-                root.transferProgress = success ? 100 : root.transferProgress
-                root.transferring = false
-                root.transferPaused = false
-                root.cancelRequested = false
-                root.transferSpeed = "0 B/s"
-                root.transferEta = "00:00"
-            }
-        }
-    }
-
-
 
     width: 245
     height: 310
@@ -213,153 +166,7 @@ Item {
                     font.pixelSize: 12
                 }
 
-                Rectangle {
-                    visible: root.transferring || root.transferProgress > 0
-
-                    width: parent.width
-                    height: 8
-
-                    radius: 4
-
-                    color: "#252C3A"
-
-                    Rectangle {
-                        width: parent.width * Math.max(0, Math.min(100, root.transferProgress)) / 100
-
-                        height: parent.height
-
-                        radius: 4
-
-                        color: root.gameColor
-
-                        Behavior on width {
-                            NumberAnimation {
-                                duration: 180
-                                easing.type: Easing.OutCubic
-                            }
-                        }
-                    }
-                }
-
-                Row {
-                    visible: root.transferring || root.transferProgress > 0
-
-                    width: parent.width
-
-                    spacing: 8
-
-                    Text {
-                        text: root.transferProgress + "%"
-
-                        color: "white"
-
-                        font.pixelSize: 12
-                        font.bold: true
-                    }
-
-                    Text {
-                        text: root.transferSpeed
-
-                        color: root.gameColor
-
-                        font.pixelSize: 12
-                        font.bold: true
-                    }
-
-                    Text {
-                        text: "ETA " + root.transferEta
-
-                        color: "#B8BDCA"
-
-                        font.pixelSize: 11
-                    }
-                }
-
-                Text {
-                    visible: root.transferring
-
-                    text: root.transferPaused ? "تم إيقاف النقل مؤقتًا" : "جاري نقل الملفات..."
-
-                    color: root.gameColor
-
-                    font.pixelSize: 12
-                    font.bold: true
-                }
-
-                Row {
-                    visible: root.transferring
-                    width: parent.width
-                    spacing: 7
-
-                    Button {
-                        width: 105
-                        height: 36
-
-                        onClicked: {
-                            if (root.transferPaused) {
-                                appController.resumeTransfer()
-                                root.transferPaused = false
-                            } else {
-                                appController.pauseTransfer()
-                                root.transferPaused = true
-                            }
-                        }
-
-                        background: Rectangle {
-                            radius: 9
-                            color: root.gameColor
-                        }
-
-                        contentItem: Text {
-                            text: root.transferPaused ? "استئناف" : "إيقاف مؤقت"
-                            color: "white"
-                            font.pixelSize: 12
-                            font.bold: true
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                    }
-
-                    Button {
-                        width: 105
-                        height: 36
-
-                        enabled: root.transferring && !root.cancelRequested
-
-                        onClicked: {
-                            if (root.cancelRequested)
-                                return
-
-                            root.cancelRequested = true
-                            root.transferPaused = false
-
-                            // Return the card completely to normal state.
-                            root.transferring = false
-                            root.transferProgress = 0
-                            root.transferSpeed = "0 B/s"
-                            root.transferEta = "00:00"
-
-                            appController.cancelTransfer()
-                        }
-
-                        background: Rectangle {
-                            radius: 9
-                            color: "#A83232"
-                        }
-
-                        contentItem: Text {
-                            text: "إلغاء النقل"
-                            color: "white"
-                            font.pixelSize: 12
-                            font.bold: true
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                    }
-                }
-
                 Column {
-                    visible: !root.transferring
                     width: parent.width
                     spacing: 7
 
@@ -371,7 +178,6 @@ Item {
                             width: (parent.width - 7) / 2
                             height: 36
 
-                            enabled: !root.transferring
 
                             onClicked: {
                                 appController.installGame(
@@ -400,7 +206,6 @@ Item {
                             width: (parent.width - 7) / 2
                             height: 36
 
-                            enabled: !root.transferring
 
                             onClicked: {
                                 appController.launchGame(
@@ -432,18 +237,10 @@ Item {
                         width: parent.width
                         height: 36
 
-                        enabled: !root.transferring
 
                         onClicked: {
                             passwordField.text = ""
                             passwordError.visible = false
-                            root.cancelRequested = false
-                            root.transferPaused = false
-                            root.transferring = true
-                            root.transferProgress = 0
-                            root.transferSpeed = "0 B/s"
-                            root.transferEta = "00:00"
-
                             appController.copyGame(
                                 root.gameName
                             )
@@ -577,13 +374,6 @@ Item {
 
                                 passwordError.visible = false
                                 copyPasswordDialog.close()
-
-                                root.cancelRequested = false
-                                root.transferPaused = false
-                                root.transferring = true
-                                root.transferProgress = 0
-                                root.transferSpeed = "0 B/s"
-                                root.transferEta = "00:00"
 
                                 appController.copyGame(
                                     root.gameName

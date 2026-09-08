@@ -12,7 +12,6 @@ from engine.transfer_engine import TransferEngine
 from engine.adb_engine import ADBEngine
 from engine.path_manager import PathManager
 from engine.game_config import get_game, find_game_folder
-from transfer_window import TransferWindow
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -64,6 +63,12 @@ class AppController(QObject):
     transferSpeedChanged = Signal(str)
     transferEtaChanged = Signal(str)
     transferFinished = Signal(bool, str)
+    operationStateChanged = Signal(str)
+    operationRejected = Signal(str)
+    transferBatchChanged = Signal(list)
+    deviceProgressChanged = Signal(str, int, str, str, str, str, str)
+    operationFinished = Signal(str)
+    busyChanged = Signal(bool)
     usbChanged = Signal(str)
     destinationChanged = Signal(str)
     adbDevicesChanged = Signal(list)
@@ -79,14 +84,8 @@ class AppController(QObject):
         # ???? ADB: ????? ???????? ??? ??????
         self.adb_engine = ADBEngine()
 
-        self.transfer_window = TransferWindow()
-
         self.adb_engine.progressChanged.connect(
             self._progress
-        )
-
-        self.adb_engine.progressChanged.connect(
-            self._transfer_progress
         )
 
         self.adb_engine.statusChanged.connect(
@@ -128,7 +127,10 @@ class AppController(QObject):
         # ???? ADB ??????
         self.selected_device = ""
         self.selected_devices = []
-        self._multi_transfer = None
+        self._active_operations = {}
+        self._operation_state = "IDLE"
+        self._operation_busy = False
+        self._device_info = {}
 
         self.current_source = "WIRELESS"
 
@@ -151,44 +153,15 @@ class AppController(QObject):
 
 
     def _transfer_progress(self, percent, speed, eta):
-
-        try:
-            self.transfer_window.show()
-
-            self.transfer_window.update_transfer(
-                percent,
-                speed,
-                eta
-            )
-
-        except Exception as e:
-            print("TRANSFER WINDOW ERROR:", e)
+        self._progress(percent, speed, eta)
 
 
     def _transfer_status(self, text):
-
-        try:
-            self.transfer_window.show()
-            self.transfer_window.set_status(text)
-
-        except Exception as e:
-            print("TRANSFER STATUS ERROR:", e)
+        self._status(text)
 
 
     def _transfer_log(self, text):
-
-        try:
-            self.transfer_window.show()
-
-            self.transfer_window.add_log(
-                text
-            )
-
-        except Exception as e:
-            print(
-                "TRANSFER LOG ERROR:",
-                e
-            )
+        print("TRANSFER LOG:", text)
 
     def _get_current_game(self):
         return self._current_game
@@ -206,6 +179,15 @@ class AppController(QObject):
         notify=currentGameChanged
     )
 
+    def _get_operation_busy(self):
+        return self._operation_busy
+
+    operationBusy = Property(
+        bool,
+        _get_operation_busy,
+        notify=busyChanged
+    )
+
     def _progress(self, percent, speed, eta):
         print(
             f"PROGRESS: {percent}% | {speed} | ETA {eta}"
@@ -215,67 +197,215 @@ class AppController(QObject):
         self.transferSpeedChanged.emit(speed)
         self.transferEtaChanged.emit(eta)
 
+        for serial, operation in self._active_operations.items():
+            if operation.get("engine") is self.adb_engine:
+                self._update_operation(
+                    serial,
+                    percent=percent,
+                    speed=speed,
+                    eta=eta
+                )
+
     def _status(self, message):
         print("STATUS:", message)
         self.messageChanged.emit(message)
 
-    def _finished(self, success, message):
-        print(
-            "FINISHED:",
-            success,
-            message
+        for serial, operation in self._active_operations.items():
+            if operation.get("engine") is self.adb_engine:
+                self._update_operation(
+                    serial,
+                    status=message,
+                    operation_text=message
+                )
+
+    def _set_operation_state(self, state):
+        self._operation_state = state
+        busy = any(
+            not operation.get("completed", False)
+            for operation in self._active_operations.values()
         )
 
-        if self._multi_transfer is not None:
-            transfer = self._multi_transfer
-            device = transfer["active"]
-            transfer["results"].append((device, success, message))
+        if self._operation_busy != busy:
+            self._operation_busy = busy
+            self.busyChanged.emit(busy)
 
-            if transfer["remaining"]:
-                QTimer.singleShot(
-                    100,
-                    self._start_next_device_transfer
-                )
-                return
+        self.operationStateChanged.emit(state)
 
-            completed = sum(
-                1
-                for _, device_success, _ in transfer["results"]
-                if device_success
-            )
-            failed = len(transfer["results"]) - completed
-            summary_lines = [
-                f"{len(transfer['results'])} devices selected"
-            ]
-            summary_lines.extend(
-                (
-                    f"{device}: SUCCESS"
-                    if device_success
-                    else f"{device}: FAILED ({message})"
-                )
-                for device, device_success, message
-                in transfer["results"]
-            )
-            summary_lines.extend(
-                [
-                    f"Completed: {completed}",
-                    f"Failed: {failed}"
-                ]
-            )
-            summary = "\n".join(summary_lines)
-            self._multi_transfer = None
-            self.transferFinished.emit(failed == 0, summary)
-            self.messageChanged.emit(summary)
+    def _reject_operation(self, message):
+        self.messageChanged.emit(message)
+        self.operationRejected.emit(message)
+
+    def _operation_rows(self):
+        return [
+            {
+                "serial": operation["serial"],
+                "model": operation.get("model", "Android"),
+                "game": operation.get("game", ""),
+                "kind": operation.get("kind", ""),
+                "status": operation.get("status", "انتظار"),
+                "percent": operation.get("percent", 0),
+                "operation": operation.get("operation", ""),
+                "speed": operation.get("speed", "--"),
+                "eta": operation.get("eta", "--"),
+                "error": operation.get("error", ""),
+                "cancelled": operation.get("cancelled", False)
+            }
+            for operation in self._active_operations.values()
+        ]
+
+    def _update_operation(
+        self,
+        serial,
+        percent=None,
+        status=None,
+        operation_text=None,
+        speed=None,
+        eta=None,
+        error=None
+    ):
+        operation = self._active_operations.get(serial)
+        if operation is None:
             return
 
-        self.transferFinished.emit(
+        if percent is not None:
+            operation["percent"] = percent
+        if status is not None:
+            operation["status"] = status
+        if operation_text is not None:
+            operation["operation"] = operation_text
+        if speed is not None:
+            operation["speed"] = speed
+        if eta is not None:
+            operation["eta"] = eta
+        if error is not None:
+            operation["error"] = error
+
+        self.deviceProgressChanged.emit(
+            serial,
+            operation["percent"],
+            operation["status"],
+            operation["operation"],
+            operation["speed"],
+            operation["eta"],
+            operation["error"]
+        )
+        self.transferBatchChanged.emit(self._operation_rows())
+
+    def _emit_operation_state(self):
+        self.transferBatchChanged.emit(self._operation_rows())
+        self._set_operation_state(
+            "ACTIVE" if self._active_operations else "IDLE"
+        )
+
+    def _start_operation(self, operation):
+        serial = operation["serial"]
+        engine = ADBEngine()
+        operation["engine"] = engine
+        self._active_operations[serial] = operation
+
+        engine.progressChanged.connect(
+            lambda percent, speed, eta, s=serial:
+            self._update_operation(
+                s,
+                percent=percent,
+                speed=speed,
+                eta=eta
+            )
+        )
+        engine.statusChanged.connect(
+            lambda message, s=serial:
+            self._update_operation(
+                s,
+                status=message,
+                operation_text=message
+            )
+        )
+        engine.finished.connect(
+            lambda success, message, s=serial:
+            self._finished_for_device(
+                s,
+                success,
+                message
+            )
+        )
+
+        self._emit_operation_state()
+        self._update_operation(
+            serial,
+            status="جاري التثبيت"
+            if operation["kind"] == "install"
+            else "جاري النسخ",
+            operation_text="تثبيت التطبيق"
+            if operation["kind"] == "install"
+            else "نسخ بيانات اللعبة",
+            speed="--" if operation["kind"] == "install" else "0 B/s",
+            eta="--"
+        )
+
+        if operation["kind"] == "install":
+            if operation["install_type"] == "apks":
+                engine.install_apks(serial, operation["apk"])
+            else:
+                engine.install(serial, operation["apk"])
+        else:
+            engine.push(
+                serial,
+                operation["source"],
+                operation["destination"]
+            )
+
+    def _finished(self, success, message):
+        self.messageChanged.emit(message)
+
+    def _finished_for_device(self, serial, success, message):
+        print(
+            "FINISHED:",
+            serial,
             success,
             message
         )
 
-        self.messageChanged.emit(
-            message
+        operation = self._active_operations.get(serial)
+        if operation is None or operation.get("completed"):
+            return
+
+        operation["completed"] = True
+        operation["status"] = (
+            "ملغي"
+            if operation.get("cancelled")
+            else "اكتمل"
+            if success
+            else "فشل"
         )
+        operation["operation"] = (
+            "تم إلغاء العملية"
+            if operation.get("cancelled")
+            else "اكتمل التثبيت"
+            if operation["kind"] == "install" and success
+            else "فشل التثبيت"
+            if operation["kind"] == "install"
+            else "اكتمل النسخ"
+            if success
+            else "فشل النسخ"
+        )
+        operation["percent"] = 100 if success and operation["kind"] == "copy" else operation["percent"]
+        operation["error"] = "" if success else message
+        operation["result"] = {
+            "serial": serial,
+            "success": success and not operation.get("cancelled"),
+            "message": message
+        }
+        self._emit_operation_state()
+        self.operationFinished.emit(
+            f"{serial}: {'SUCCESS' if success else 'FAILED'}"
+        )
+        self.transferFinished.emit(
+            operation["result"]["success"],
+            operation["result"]["message"]
+        )
+        self.messageChanged.emit(message)
+        if operation.get("engine") is not None:
+            operation["engine"] = None
 
     @Slot(result=list)
     def getADBDevices(self):
@@ -293,6 +423,10 @@ class AppController(QObject):
             for serial in self.selected_devices
             if serial in available_serials
         ]
+        self._device_info = {
+            d.get("serial", ""): d
+            for d in devices
+        }
         if self.selected_device not in available_serials:
             self.selected_device = (
                 self.selected_devices[0]
@@ -348,31 +482,6 @@ class AppController(QObject):
             self.selected_devices
         )
 
-    def _start_next_device_transfer(self):
-        if self._multi_transfer is None:
-            return
-
-        if self.adb_engine._thread and self.adb_engine._thread.is_alive():
-            QTimer.singleShot(
-                100,
-                self._start_next_device_transfer
-            )
-            return
-
-        transfer = self._multi_transfer
-        device = transfer["remaining"].pop(0)
-        transfer["active"] = device
-        self.selected_device = device
-        self.messageChanged.emit(
-            f"جاري النسخ إلى الجهاز: {device}"
-        )
-        self.adb_engine.push(
-            device,
-            transfer["source"],
-            transfer["destination"]
-        )
-
-
     @Slot(str)
     def copyGame(self, game_name):
 
@@ -381,51 +490,21 @@ class AppController(QObject):
         print("ADB COPY REQUEST:", game_name)
         print("==============================")
 
-        if self._multi_transfer is not None:
-            self.messageChanged.emit(
-                "يوجد نقل قيد التنفيذ"
-            )
-            return
-
         # ==========================================
-        # AUTO SELECT ADB DEVICE
+        # EXPLICITLY SELECTED ADB DEVICES
         # ==========================================
 
         target_devices = list(self.selected_devices)
 
         if not target_devices and self.selected_device:
-            target_devices = [self.selected_device]
+            target_devices = []
 
         if not target_devices:
 
-            print("NO ADB DEVICE SELECTED")
-            print("SEARCHING FOR ADB DEVICES...")
-
-            devices = self.adb_engine.get_devices()
-
-            print("ADB DEVICES FOUND:", devices)
-
-            if not devices:
-
-                print("NO ADB DEVICES AVAILABLE")
-
-                self.messageChanged.emit(
-                    "?? ???? ???? ???? ??? ADB"
-                )
-
-                return
-
-            target_devices = [devices[0]["serial"]]
-            self.selected_device = target_devices[0]
-
-            print(
-                "AUTO ADB DEVICE SELECTED:",
-                self.selected_device
+            self._reject_operation(
+                "يرجى تحديد هاتف واحد على الأقل قبل بدء النسخ."
             )
-
-            self.messageChanged.emit(
-                f"?? ?????? ?????? ????????: {self.selected_device}"
-            )
+            return
 
         # ==========================================
         # CHECK SOURCE
@@ -626,14 +705,42 @@ class AppController(QObject):
         if game_name == "Call of Duty Mobile":
             push_source = str(source) + "/."
 
-        self._multi_transfer = {
-            "remaining": target_devices,
-            "results": [],
-            "active": None,
-            "source": push_source,
-            "destination": adb_destination
-        }
-        self._start_next_device_transfer()
+        started = 0
+        for serial in target_devices:
+            existing = self._active_operations.get(serial)
+            if existing and not existing.get("completed", False):
+                self.messageChanged.emit(
+                    f"الهاتف المحدد لديه عملية نقل قيد التنفيذ: {serial}"
+                )
+                continue
+
+            self._start_operation(
+                {
+                    "serial": serial,
+                    "model": self._device_info.get(
+                        serial,
+                        {}
+                    ).get("name", serial),
+                    "game": game_name,
+                    "kind": "copy",
+                    "source": push_source,
+                    "destination": adb_destination,
+                    "status": "جاري التجهيز",
+                    "percent": 0,
+                    "operation": "جاري بدء العملية",
+                    "speed": "--",
+                    "eta": "--",
+                    "error": "",
+                    "completed": False,
+                    "cancelled": False
+                }
+            )
+            started += 1
+
+        if not started:
+            self._reject_operation(
+                "كل الهواتف المحددة مشغولة بعمليات نقل حالية."
+            )
 
     @Slot(str)
     def startGameTransfer(self, game_name):
@@ -646,7 +753,12 @@ class AppController(QObject):
         print("ADB LAUNCH REQUEST:", game_name)
         print("==============================")
 
-        if not self.selected_device:
+        target_devices = list(self.selected_devices)
+
+        if not target_devices and self.selected_device:
+            target_devices = [self.selected_device]
+
+        if not target_devices:
             devices = self.adb_engine.get_devices()
 
             if devices:
@@ -742,35 +854,12 @@ class AppController(QObject):
         print("ADB INSTALL REQUEST:", game_name)
         print("==============================")
 
-        if not self.selected_device:
-
-            print("NO ADB DEVICE SELECTED")
-            print("SEARCHING FOR ADB DEVICES...")
-
-            devices = self.adb_engine.get_devices()
-
-            print("ADB DEVICES FOUND:", devices)
-
-            if not devices:
-
-                print("NO ADB DEVICES AVAILABLE")
-
-                self.messageChanged.emit(
-                    "ظ„ط§ ظٹظˆط¬ط¯ ط¬ظ‡ط§ط² Android ظ…طھطµظ„ ط¹ط¨ط± ADB"
-                )
-
-                return
-
-            self.selected_device = devices[0]["serial"]
-
-            print(
-                "AUTO ADB DEVICE SELECTED:",
-                self.selected_device
+        target_devices = list(self.selected_devices)
+        if not target_devices:
+            self._reject_operation(
+                "يرجى تحديد هاتف واحد على الأقل قبل بدء التثبيت."
             )
-
-            self.messageChanged.emit(
-                f"طھظ… ط§ط®طھظٹط§ط± ط§ظ„ط¬ظ‡ط§ط² طھظ„ظ‚ط§ط¦ظٹط§: {self.selected_device}"
-            )
+            return
 
         if not self.source_root.exists():
 
@@ -873,38 +962,117 @@ class AppController(QObject):
             apk
         )
 
-        print("DEVICE:", self.selected_device)
+        print("DEVICES:", target_devices)
         print("APK:", apk)
         print("INSTALL TYPE:", install_type)
 
         self.currentGame = game_name
 
         self.messageChanged.emit(
-            f"جاري تثبيت {game_name}..."
+            f"جاري تثبيت {game_name} على {len(target_devices)} جهاز..."
         )
 
-        if install_type == "apks":
-            self.adb_engine.install_apks(
-                self.selected_device,
-                str(apk)
+        started = 0
+        for serial in target_devices:
+            existing = self._active_operations.get(serial)
+            if existing and not existing.get("completed", False):
+                self.messageChanged.emit(
+                    f"الهاتف المحدد لديه عملية نقل قيد التنفيذ: {serial}"
+                )
+                continue
+
+            self._start_operation(
+                {
+                    "serial": serial,
+                    "model": self._device_info.get(
+                        serial,
+                        {}
+                    ).get("name", serial),
+                    "game": game_name,
+                    "kind": "install",
+                    "apk": str(apk),
+                    "install_type": install_type,
+                    "status": "جاري التجهيز",
+                    "percent": -1,
+                    "operation": "جاري بدء العملية",
+                    "speed": "--",
+                    "eta": "--",
+                    "error": "",
+                    "completed": False,
+                    "cancelled": False
+                }
             )
-        else:
-            self.adb_engine.install(
-                self.selected_device,
-                str(apk)
+            started += 1
+
+        if not started:
+            self._reject_operation(
+                "كل الهواتف المحددة مشغولة بعمليات تثبيت حالية."
             )
 
     @Slot()
     def pauseTransfer(self):
-        self.adb_engine.pause()
+        active = list(self._active_operations.items())
+
+        if not active:
+            return
+
+        for serial, operation in active:
+            if operation.get("completed", False):
+                continue
+
+            engine = operation.get("engine")
+            if engine is None:
+                continue
+
+            try:
+                engine.pause()
+            except Exception as e:
+                print("PAUSE ERROR:", serial, e)
 
     @Slot()
     def resumeTransfer(self):
-        self.adb_engine.resume()
+        active = list(self._active_operations.items())
+
+        if not active:
+            return
+
+        for serial, operation in active:
+            if operation.get("completed", False):
+                continue
+
+            engine = operation.get("engine")
+            if engine is None:
+                continue
+
+            try:
+                engine.resume()
+            except Exception as e:
+                print("RESUME ERROR:", serial, e)
 
     @Slot()
     def cancelTransfer(self):
-        self.adb_engine.cancel()
+        if not self._operation_busy:
+            return
+
+        self.messageChanged.emit(
+            "جاري إلغاء العمليات المحددة..."
+        )
+        for serial in list(self._active_operations):
+            self.cancelDevice(serial)
+
+    @Slot(str)
+    def cancelDevice(self, serial):
+        operation = self._active_operations.get(serial)
+        if operation is None or operation.get("completed"):
+            return
+
+        operation["cancelled"] = True
+        operation["status"] = "ملغي"
+        operation["operation"] = "جاري إلغاء العملية"
+        self._update_operation(serial)
+        engine = operation.get("engine")
+        if engine is not None:
+            engine.cancel()
 
 
 print("STARTING KAFIA NET CONTROL PRO")

@@ -113,6 +113,7 @@ class ADBEngine(QObject):
 
         self._thread = None
         self._current_process = None
+        self._process_lock = threading.Lock()
         self._process_paused = False
         self._cancelled_by_user = False
 
@@ -145,6 +146,51 @@ class ADBEngine(QObject):
             startupinfo=startupinfo,
             creationflags=0x08000000,
             timeout=timeout
+        )
+
+    def _run_install_command(self, args, timeout):
+        command = [
+            self.adb,
+            *args
+        ]
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            startupinfo=startupinfo,
+            creationflags=0x08000000
+        )
+        with self._process_lock:
+            self._current_process = process
+            cancelled = self._cancel_event.is_set()
+
+        if cancelled:
+            process.terminate()
+
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            stdout, stderr = process.communicate()
+            process.returncode = process.returncode or 1
+        finally:
+            with self._process_lock:
+                if self._current_process is process:
+                    self._current_process = None
+
+        return subprocess.CompletedProcess(
+            command,
+            process.returncode,
+            stdout,
+            stderr
         )
 
     @Slot(result=list)
@@ -319,6 +365,8 @@ class ADBEngine(QObject):
         destination
     ):
 
+        process = None
+
         try:
 
             self.statusChanged.emit(
@@ -358,7 +406,6 @@ class ADBEngine(QObject):
             print("========================================")
 
             self._pause_event.set()
-            self._cancel_event.clear()
 
             command = [
                 self.adb,
@@ -392,7 +439,7 @@ class ADBEngine(QObject):
                 subprocess.SW_HIDE
             )
 
-            self._current_process = subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -403,7 +450,12 @@ class ADBEngine(QObject):
                 )
             )
 
-            process = self._current_process
+            with self._process_lock:
+                self._current_process = process
+                cancelled = self._cancel_event.is_set()
+
+            if cancelled:
+                process.terminate()
 
             start_time = time.monotonic()
 
@@ -613,7 +665,9 @@ class ADBEngine(QObject):
             except Exception:
                 stderr_text = ""
 
-            self._current_process = None
+            with self._process_lock:
+                if self._current_process is process:
+                    self._current_process = None
 
             # --------------------------------------------------------
             # SUCCESS
@@ -713,7 +767,9 @@ class ADBEngine(QObject):
 
         except Exception as e:
 
-            self._current_process = None
+            with self._process_lock:
+                if self._current_process is process:
+                    self._current_process = None
 
             print(
                 "ADB FAST TRANSFER ERROR:",
@@ -752,6 +808,8 @@ class ADBEngine(QObject):
     @Slot(str, str)
     def install_apks(self, device, apks_file):
 
+        self._cancel_event.clear()
+
         def worker():
 
             import tempfile
@@ -760,7 +818,6 @@ class ADBEngine(QObject):
             temp_dir = None
 
             try:
-
                 if not os.path.isfile(apks_file):
 
                     self.finished.emit(
@@ -810,7 +867,7 @@ class ADBEngine(QObject):
                     "جاري تثبيت حزمة Free Fire..."
                 )
 
-                result = self._run(
+                result = self._run_install_command(
                     [
                         "-s",
                         device,
@@ -833,12 +890,6 @@ class ADBEngine(QObject):
                 )
 
                 if result.returncode == 0:
-
-                    self.progressChanged.emit(
-                        100,
-                        "0 B/s",
-                        "00:00"
-                    )
 
                     self.statusChanged.emit(
                         "اكتمل التثبيت"
@@ -890,10 +941,11 @@ class ADBEngine(QObject):
     @Slot(str)
     def install(self, device, apk):
 
+        self._cancel_event.clear()
+
         def worker():
 
             try:
-
                 if not os.path.isfile(apk):
 
                     self.finished.emit(
@@ -907,7 +959,7 @@ class ADBEngine(QObject):
                     "جاري تثبيت التطبيق..."
                 )
 
-                result = self._run(
+                result = self._run_install_command(
                     [
                         "-s",
                         device,
@@ -927,12 +979,6 @@ class ADBEngine(QObject):
                 print("ADB INSTALL:", output)
 
                 if result.returncode == 0:
-
-                    self.progressChanged.emit(
-                        100,
-                        "0 B/s",
-                        "00:00"
-                    )
 
                     self.statusChanged.emit(
                         "اكتمل التثبيت"
@@ -964,7 +1010,8 @@ class ADBEngine(QObject):
 
     def _suspend_current_process(self):
 
-        process = self._current_process
+        with self._process_lock:
+            process = self._current_process
 
         if process is None:
             return False
@@ -1185,7 +1232,8 @@ class ADBEngine(QObject):
 
         self._pause_event.set()
 
-        process = self._current_process
+        with self._process_lock:
+            process = self._current_process
 
         if process is not None:
 
@@ -1212,4 +1260,3 @@ class ADBEngine(QObject):
                 )
 
         self._process_paused = False
-

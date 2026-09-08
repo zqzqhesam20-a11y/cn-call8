@@ -40,6 +40,9 @@ ApplicationWindow {
     property string adbDeviceText: "لا يوجد جهاز متصل"
     property var adbDevices: []
     property var selectedAdbSerials: []
+    property bool operationBusy: false
+    property var transferDevices: []
+    property string operationMessage: ""
 
 
     // =============================================================
@@ -1009,9 +1012,27 @@ ApplicationWindow {
 
         }
 
+        function onOperationStateChanged(state) {
+            window.operationBusy = state !== "IDLE"
+        }
+
+        function onTransferBatchChanged(devices) {
+            window.transferDevices = devices
+        }
+
+        function onOperationFinished(message) {
+            window.operationMessage = message
+        }
+
+        function onOperationRejected(message) {
+            window.operationMessage = message
+        }
+
+        function onMessageChanged(message) {
+            window.operationMessage = message
+        }
 
         function onAdbDevicesChanged(devices) {
-
             console.log("ADB DEVICES FROM PYTHON:", devices)
 
             if (!devices || devices.length === 0) {
@@ -1040,6 +1061,185 @@ ApplicationWindow {
 
         }
 
+    }
+
+    Rectangle {
+        id: transferPanel
+
+        visible: window.transferDevices.length > 0
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 24
+        anchors.bottomMargin: 24
+        width: 500
+        height: Math.min(parent.height - 48, 620)
+        radius: 16
+        color: "#111722"
+        border.width: 1
+        border.color: window.operationBusy ? "#00AFCF" : "#2A3445"
+        z: 20
+
+        Column {
+            anchors.fill: parent
+            anchors.margins: 16
+            spacing: 10
+
+            Row {
+                width: parent.width
+                spacing: 10
+
+                Text {
+                    text: window.operationBusy
+                          ? "العملية قيد التنفيذ"
+                          : "نتيجة العملية"
+                    color: "#00D9FF"
+                    font.pixelSize: 16
+                    font.bold: true
+                }
+
+                Item {
+                    width: parent.width - 180
+                    height: 1
+                }
+
+                Button {
+                    visible: window.operationBusy
+                    text: "إلغاء الكل"
+                    onClicked: appController.cancelTransfer()
+                }
+            }
+
+            Text {
+                width: parent.width
+                text: window.operationMessage
+                color: "#B9C3D2"
+                elide: Text.ElideRight
+                maximumLineCount: 2
+            }
+
+            ListView {
+                width: parent.width
+                height: parent.height - 62
+                clip: true
+                spacing: 8
+                model: window.transferDevices
+
+                delegate: Rectangle {
+                    width: ListView.view.width
+                    height: 148
+                    radius: 12
+                    color: "#181F2B"
+                    border.width: 1
+                    border.color: modelData.status === "فشل"
+                                  ? "#A83232"
+                                  : modelData.status === "اكتمل"
+                                    ? "#247A58"
+                                    : "#29384A"
+
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 12
+                        spacing: 5
+
+                        Text {
+                            width: parent.width
+                            text: modelData.model
+                            color: "white"
+                            font.pixelSize: 14
+                            font.bold: true
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: "Serial: " + modelData.serial
+                            color: "#8F9CAF"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: modelData.game
+                            color: "#DCE4F0"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: "الحالة: " + modelData.status
+                            color: modelData.status === "فشل"
+                                   ? "#FF7777"
+                                   : modelData.status === "اكتمل"
+                                     ? "#42D995"
+                                     : "#00D9FF"
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+
+                        Rectangle {
+                            width: parent.width
+                            height: 7
+                            radius: 4
+                            color: "#252C3A"
+
+                            Rectangle {
+                                visible: modelData.percent >= 0
+                                width: parent.width
+                                       * Math.max(0, Math.min(
+                                           100, modelData.percent
+                                       )) / 100
+                                height: parent.height
+                                radius: 4
+                                color: "#00B8D9"
+                            }
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: modelData.percent >= 0
+                                  ? modelData.percent + "%"
+                                  : "جارٍ التنفيذ..."
+                            color: "#DCE4F0"
+                            font.pixelSize: 11
+                        }
+
+                        Text {
+                            width: parent.width
+                            text: modelData.operation
+                                  + "  |  "
+                                  + modelData.speed
+                                  + "  |  ETA "
+                                  + modelData.eta
+                            color: "#AAB6C8"
+                            font.pixelSize: 10
+                            elide: Text.ElideRight
+                        }
+
+                        Text {
+                            visible: modelData.error !== ""
+                            width: parent.width
+                            text: modelData.error
+                            color: "#FF8C8C"
+                            font.pixelSize: 10
+                            elide: Text.ElideRight
+                        }
+
+                        Button {
+                            visible: window.operationBusy
+                                     && modelData.status !== "اكتمل"
+                                     && modelData.status !== "فشل"
+                                     && modelData.status !== "ملغي"
+                            text: "إلغاء"
+                            onClicked: appController.cancelDevice(
+                                modelData.serial
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 
     Popup {
