@@ -4,7 +4,7 @@ from pathlib import Path
 
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
 
-from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, Property
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -127,8 +127,6 @@ class AppController(QObject):
 
         # ???? ADB ??????
         self.selected_device = ""
-        self.selected_devices = []
-        self._multi_transfer = None
 
         self.current_source = "WIRELESS"
 
@@ -226,48 +224,6 @@ class AppController(QObject):
             message
         )
 
-        if self._multi_transfer is not None:
-            transfer = self._multi_transfer
-            device = transfer["active"]
-            transfer["results"].append((device, success, message))
-
-            if transfer["remaining"]:
-                QTimer.singleShot(
-                    100,
-                    self._start_next_device_transfer
-                )
-                return
-
-            completed = sum(
-                1
-                for _, device_success, _ in transfer["results"]
-                if device_success
-            )
-            failed = len(transfer["results"]) - completed
-            summary_lines = [
-                f"{len(transfer['results'])} devices selected"
-            ]
-            summary_lines.extend(
-                (
-                    f"{device}: SUCCESS"
-                    if device_success
-                    else f"{device}: FAILED ({message})"
-                )
-                for device, device_success, message
-                in transfer["results"]
-            )
-            summary_lines.extend(
-                [
-                    f"Completed: {completed}",
-                    f"Failed: {failed}"
-                ]
-            )
-            summary = "\n".join(summary_lines)
-            self._multi_transfer = None
-            self.transferFinished.emit(failed == 0, summary)
-            self.messageChanged.emit(summary)
-            return
-
         self.transferFinished.emit(
             success,
             message
@@ -284,31 +240,14 @@ class AppController(QObject):
 
         print("ADB DEVICES:", devices)
 
-        available_serials = {
-            d.get("serial", "")
-            for d in devices
-        }
-        self.selected_devices = [
-            serial
-            for serial in self.selected_devices
-            if serial in available_serials
-        ]
-        if self.selected_device not in available_serials:
-            self.selected_device = (
-                self.selected_devices[0]
-                if self.selected_devices
-                else ""
-            )
+        if not devices:
+            self.selected_device = ""
 
         qml_devices = []
 
         for d in devices:
             qml_devices.append(
-                {
-                    "serial": d.get("serial", ""),
-                    "model": d.get("model", d.get("name", "Android")),
-                    "name": d.get("name", d.get("serial", "Android"))
-                }
+                d.get("name", d.get("serial", "Android"))
             )
 
         self.adbDevicesChanged.emit(qml_devices)
@@ -320,7 +259,6 @@ class AppController(QObject):
     def selectADBDevice(self, device):
 
         self.selected_device = device
-        self.selected_devices = [device] if device else []
 
         print(
             "ADB DEVICE SELECTED:",
@@ -329,47 +267,6 @@ class AppController(QObject):
 
         self.messageChanged.emit(
             f"?? ?????? ??????: {device}"
-        )
-
-    @Slot(list)
-    def setADBDeviceSelection(self, devices):
-        self.selected_devices = [
-            device
-            for device in devices
-            if isinstance(device, str) and device
-        ]
-        self.selected_device = (
-            self.selected_devices[0]
-            if self.selected_devices
-            else ""
-        )
-        print(
-            "ADB DEVICES SELECTED:",
-            self.selected_devices
-        )
-
-    def _start_next_device_transfer(self):
-        if self._multi_transfer is None:
-            return
-
-        if self.adb_engine._thread and self.adb_engine._thread.is_alive():
-            QTimer.singleShot(
-                100,
-                self._start_next_device_transfer
-            )
-            return
-
-        transfer = self._multi_transfer
-        device = transfer["remaining"].pop(0)
-        transfer["active"] = device
-        self.selected_device = device
-        self.messageChanged.emit(
-            f"جاري النسخ إلى الجهاز: {device}"
-        )
-        self.adb_engine.push(
-            device,
-            transfer["source"],
-            transfer["destination"]
         )
 
 
@@ -381,22 +278,11 @@ class AppController(QObject):
         print("ADB COPY REQUEST:", game_name)
         print("==============================")
 
-        if self._multi_transfer is not None:
-            self.messageChanged.emit(
-                "يوجد نقل قيد التنفيذ"
-            )
-            return
-
         # ==========================================
         # AUTO SELECT ADB DEVICE
         # ==========================================
 
-        target_devices = list(self.selected_devices)
-
-        if not target_devices and self.selected_device:
-            target_devices = [self.selected_device]
-
-        if not target_devices:
+        if not self.selected_device:
 
             print("NO ADB DEVICE SELECTED")
             print("SEARCHING FOR ADB DEVICES...")
@@ -415,8 +301,7 @@ class AppController(QObject):
 
                 return
 
-            target_devices = [devices[0]["serial"]]
-            self.selected_device = target_devices[0]
+            self.selected_device = devices[0]["serial"]
 
             print(
                 "AUTO ADB DEVICE SELECTED:",
@@ -580,7 +465,7 @@ class AppController(QObject):
         print("SOURCE:", source)
         print("SOURCE EXISTS:", source.exists())
         print("SOURCE IS DIR:", source.is_dir())
-        print("ADB DEVICES:", target_devices)
+        print("ADB DEVICE:", self.selected_device)
         print("ADB DESTINATION:", adb_destination)
 
         if source.is_dir():
@@ -626,14 +511,11 @@ class AppController(QObject):
         if game_name == "Call of Duty Mobile":
             push_source = str(source) + "/."
 
-        self._multi_transfer = {
-            "remaining": target_devices,
-            "results": [],
-            "active": None,
-            "source": push_source,
-            "destination": adb_destination
-        }
-        self._start_next_device_transfer()
+        self.adb_engine.push(
+            self.selected_device,
+            push_source,
+            adb_destination
+        )
 
     @Slot(str)
     def startGameTransfer(self, game_name):
@@ -955,3 +837,4 @@ print(
 )
 
 sys.exit(exit_code)
+

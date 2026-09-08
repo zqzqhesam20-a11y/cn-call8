@@ -38,8 +38,6 @@ ApplicationWindow {
 
     property bool adbDeviceConnected: false
     property string adbDeviceText: "لا يوجد جهاز متصل"
-    property var adbDevices: []
-    property var selectedAdbSerials: []
 
 
     // =============================================================
@@ -824,7 +822,6 @@ ApplicationWindow {
 
                                 onClicked: {
                                     appController.getADBDevices()
-                                    adbDevicePopup.open()
                                 }
 
                             }
@@ -873,8 +870,6 @@ ApplicationWindow {
                                 onClicked: {
 
                                     console.log("REFRESH")
-                                    appController.getADBDevices()
-                                    adbDevicePopup.open()
 
                                 }
 
@@ -1018,123 +1013,34 @@ ApplicationWindow {
 
                 window.adbDeviceConnected = false
                 window.adbDeviceText = "لا يوجد جهاز متصل"
-                window.adbDevices = []
-                window.selectedAdbSerials = []
 
                 return
             }
 
             window.adbDeviceConnected = true
-            window.adbDevices = devices
-            window.selectedAdbSerials = window.selectedAdbSerials.filter(
-                function(serial) {
-                    return devices.some(function(device) {
-                        return device.serial === serial
-                    })
-                }
-            )
-            window.adbDeviceText = devices.length
-                    + " جهاز متصل - "
-                    + window.selectedAdbSerials.length
-                    + " محدد"
+
+            var first = devices[0]
+
+            if (typeof first === "object") {
+
+                var serial = first.serial || ""
+                var model = first.model || first.name || ""
+
+                if (model && serial)
+                    window.adbDeviceText = model + " / " + serial
+                else if (serial)
+                    window.adbDeviceText = serial
+                else
+                    window.adbDeviceText = "جهاز Android متصل"
+
+            } else {
+
+                window.adbDeviceText = String(first)
+
+            }
 
         }
 
-    }
-
-    Popup {
-        id: adbDevicePopup
-
-        x: 250
-        y: 95
-        width: 390
-        height: Math.min(window.height - 130, 460)
-        modal: true
-        focus: true
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-
-        background: Rectangle {
-            color: "#111722"
-            radius: 14
-            border.width: 1
-            border.color: "#26394A"
-        }
-
-        contentItem: Column {
-            spacing: 10
-            padding: 16
-
-            Text {
-                text: "الأجهزة المتصلة"
-                color: "#00D9FF"
-                font.pixelSize: 16
-                font.bold: true
-            }
-
-            ListView {
-                width: parent.width
-                height: 300
-                clip: true
-                model: window.adbDevices
-
-                delegate: CheckBox {
-                    width: ListView.view.width
-                    text: modelData.model + " / " + modelData.serial
-                    checked: window.selectedAdbSerials.indexOf(
-                                 modelData.serial
-                             ) !== -1
-                    onClicked: {
-                        var selected = window.selectedAdbSerials.slice()
-                        var index = selected.indexOf(modelData.serial)
-                        if (checked && index === -1)
-                            selected.push(modelData.serial)
-                        else if (!checked && index !== -1)
-                            selected.splice(index, 1)
-                        window.selectedAdbSerials = selected
-                        appController.setADBDeviceSelection(selected)
-                        window.adbDeviceText = window.adbDevices.length
-                                + " جهاز متصل - "
-                                + selected.length
-                                + " محدد"
-                    }
-                }
-            }
-
-            Row {
-                spacing: 8
-
-                Button {
-                    text: "تحديد الكل"
-                    onClicked: {
-                        var selected = []
-                        for (var i = 0; i < window.adbDevices.length; i++)
-                            selected.push(window.adbDevices[i].serial)
-                        window.selectedAdbSerials = selected
-                        appController.setADBDeviceSelection(selected)
-                        window.adbDeviceText = window.adbDevices.length
-                                + " جهاز متصل - "
-                                + selected.length
-                                + " محدد"
-                    }
-                }
-
-                Button {
-                    text: "مسح الكل"
-                    onClicked: {
-                        window.selectedAdbSerials = []
-                        appController.setADBDeviceSelection([])
-                        window.adbDeviceText = window.adbDevices.length
-                                + " جهاز متصل - 0 محدد"
-                    }
-                }
-
-                Text {
-                    text: window.selectedAdbSerials.length + " أجهزة محددة"
-                    color: "#B9C3D2"
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-        }
     }
 
 
