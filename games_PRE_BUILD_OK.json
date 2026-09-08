@@ -1,0 +1,58 @@
+{
+    "Fortnite": {
+        "source": "Fortnite",
+        "destination": "Fortnite",
+        "install": true
+    },
+
+    "Genshin Impact": {
+        "source": "Genshin Impact",
+        "destination": "Genshin Impact",
+        "install": true
+    },
+
+    "eFootball": {
+        "source": "eFootball",
+        "destination": "eFootball",
+        "install": true
+    },
+
+    "Free Fire": {
+        "source": "free fire",
+        "destination": "Free Fire",
+        "install": true
+    },
+
+    "PUBG Mobile": {
+        "source": "PUBG",
+        "destination": "PUBG Mobile",
+        "install": true
+    },
+
+    "Call of Duty Mobile": {
+        "source": "call of duty",
+        "destination": "Call of Duty Mobile",
+        "install": true
+    },
+
+    "Grand Theft Auto": {
+        "versions": {
+            "San Andreas": {
+                "source": "GTA/San Andreas",
+                "destination": "GTA/San Andreas"
+            },
+
+            "Vice City": {
+                "source": "GTA/Vice City",
+                "destination": "GTA/Vice City"
+            },
+
+            "GTA III": {
+                "source": "GTA/GTA III",
+                "destination": "GTA/GTA III"
+            }
+        },
+
+        "install": true
+    }
+}
