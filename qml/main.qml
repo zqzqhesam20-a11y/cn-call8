@@ -1408,7 +1408,7 @@ ApplicationWindow {
 
                 onClicked: {
 
-                    if (startupPasswordField.text === "1234") {
+                    if (startupPasswordField.text === "يخىحمشغصهفاةث") {
 
                         startupPasswordError.visible = false
                         startupPasswordDialog.close()
