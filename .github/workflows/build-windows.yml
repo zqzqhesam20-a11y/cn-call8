@@ -67,17 +67,8 @@ jobs:
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 
-      - name: Package Portable
-        shell: pwsh
-        run: |
-          Compress-Archive `
-            -Path "dist/KAFIA_NET_CONTROL_PRO" `
-            -DestinationPath "KAFIA_NET_CONTROL_PRO-Windows-Portable.zip"
-
       - name: Upload Windows packages
         uses: actions/upload-artifact@v4
         with:
           name: KAFIA_NET_CONTROL_PRO-Windows
-          path: |
-            installer/KAFIA_NET_CONTROL_PRO_Setup.exe
-            KAFIA_NET_CONTROL_PRO-Windows-Portable.zip
+          path: installer/KAFIA_NET_CONTROL_PRO_Setup.exe
