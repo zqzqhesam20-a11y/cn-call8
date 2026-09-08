@@ -693,17 +693,14 @@ class AppController(QObject):
         # START ADB TRANSFER
         # ==========================================
 
-        push_source = str(source)
-
-        # PUBG: push the contents of "saved" into "Saved/",
-        # not the "saved" directory itself.
-        if game_name == "PUBG Mobile":
-            push_source = str(source) + "/."
-
-        # COD: push the contents of the package directory into
-        # Android/data/com.activision.callofduty.shooter/.
-        if game_name == "Call of Duty Mobile":
-            push_source = str(source) + "/."
+        # Always push the CONTENTS of the selected source directory
+        # into the configured Android destination, never the source
+        # directory itself.
+        push_source = (
+            str(source) + "/."
+            if source.is_dir()
+            else str(source)
+        )
 
         started = 0
         for serial in target_devices:
