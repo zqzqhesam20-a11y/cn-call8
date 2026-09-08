@@ -415,30 +415,6 @@ class AppController(QObject):
 
                 return
 
-        elif game_name == "Call of Duty Mobile":
-
-            # COD data is stored inside the package-named directory.
-            source = source / "com.activision.callofduty.shooter"
-
-            adb_destination = (
-                "/sdcard/Android/data/com.activision.callofduty.shooter/"
-            )
-
-            print("COD PACKAGE SOURCE:", source)
-
-            if not source.exists() or not source.is_dir():
-
-                print(
-                    "COD PACKAGE SOURCE NOT FOUND:",
-                    source
-                )
-
-                self.messageChanged.emit(
-                    "???? COD package ??? ?????"
-                )
-
-                return
-
         else:
 
             adb_destination = ADB_GAME_DESTINATIONS.get(
@@ -504,11 +480,6 @@ class AppController(QObject):
         # PUBG: push the contents of "saved" into "Saved/",
         # not the "saved" directory itself.
         if game_name == "PUBG Mobile":
-            push_source = str(source) + "/."
-
-        # COD: push the contents of the package directory into
-        # Android/data/com.activision.callofduty.shooter/.
-        if game_name == "Call of Duty Mobile":
             push_source = str(source) + "/."
 
         self.adb_engine.push(
