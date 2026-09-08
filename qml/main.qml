@@ -1391,7 +1391,7 @@ ApplicationWindow {
 
                 width: parent.width
 
-                text: "Password ??? LOGIN?"
+                text: "كلمة المرور غير صحيحة"
 
                 color: "#FF5555"
 

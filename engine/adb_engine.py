@@ -1163,7 +1163,7 @@ class ADBEngine(QObject):
         if process is None or process.poll() is not None:
 
             self.statusChanged.emit(
-                "?? ???? ????? ??? ????"
+                "لا توجد عملية نقل جارية"
             )
 
             return
@@ -1173,13 +1173,13 @@ class ADBEngine(QObject):
             self._pause_event.clear()
 
             self.statusChanged.emit(
-                "????? ?????"
+                "تم إيقاف النقل مؤقتًا"
             )
 
         else:
 
             self.statusChanged.emit(
-                "???? ????? ????? ?????"
+                "تعذر إيقاف النقل مؤقتًا"
             )
 
     @Slot()
@@ -1192,7 +1192,7 @@ class ADBEngine(QObject):
             self._pause_event.set()
 
             self.statusChanged.emit(
-                "?? ???? ????? ??? ????"
+                "لا توجد عملية نقل جارية"
             )
 
             return
@@ -1204,13 +1204,13 @@ class ADBEngine(QObject):
                 self._pause_event.set()
 
                 self.statusChanged.emit(
-                    "???? ????? ??? ??????..."
+                    "تم استئناف النقل..."
                 )
 
             else:
 
                 self.statusChanged.emit(
-                    "???? ??????? ?????"
+                    "تعذر استئناف النقل"
                 )
 
         else:
@@ -1218,7 +1218,7 @@ class ADBEngine(QObject):
             self._pause_event.set()
 
             self.statusChanged.emit(
-                "???? ????? ??? ??????..."
+                "تم استئناف النقل..."
             )
 
     @Slot()

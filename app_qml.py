@@ -462,7 +462,7 @@ class AppController(QObject):
         )
 
         self.messageChanged.emit(
-            f"?? ?????? ??????: {device}"
+            f"تم تحديد الجهاز: {device}"
         )
 
     @Slot(list)
@@ -518,7 +518,7 @@ class AppController(QObject):
             )
 
             self.messageChanged.emit(
-                "???? ?????? ??? ?????"
+                "مجلد مصدر اللعبة غير موجود"
             )
 
             return
@@ -540,7 +540,7 @@ class AppController(QObject):
             )
 
             self.messageChanged.emit(
-                f"?????? ??? ??????: {game_name}"
+                f"لم يتم العثور على اللعبة: {game_name}"
             )
 
             return
@@ -555,7 +555,7 @@ class AppController(QObject):
             )
 
             self.messageChanged.emit(
-                "??????? ?????? ??? ??????"
+                "إعدادات اللعبة غير موجودة"
             )
 
             return
@@ -604,7 +604,7 @@ class AppController(QObject):
                 )
 
                 self.messageChanged.emit(
-                    "???? PUBG saved ??? ?????"
+                    "مجلد PUBG saved غير موجود"
                 )
 
                 return
@@ -628,7 +628,7 @@ class AppController(QObject):
                 )
 
                 self.messageChanged.emit(
-                    "???? COD package ??? ?????"
+                    "مجلد COD package غير موجود"
                 )
 
                 return
@@ -647,7 +647,7 @@ class AppController(QObject):
                 )
 
                 self.messageChanged.emit(
-                    "???? ADB ????? ??? ?????"
+                    "وجهة ADB غير مهيأة لهذه اللعبة"
                 )
 
                 return
@@ -686,7 +686,7 @@ class AppController(QObject):
         self.currentGame = game_name
 
         self.messageChanged.emit(
-            f"???? ??? {game_name} ??? ??????..."
+            f"جاري تجهيز {game_name} للنسخ..."
         )
 
         # ==========================================
@@ -869,7 +869,7 @@ class AppController(QObject):
             )
 
             self.messageChanged.emit(
-                "?????? ??? ????"
+                "المصدر غير موجود"
             )
 
             return
@@ -887,7 +887,7 @@ class AppController(QObject):
             )
 
             self.messageChanged.emit(
-                f"?? ??? ?????? ??? ????? {game_name}"
+                f"لم يتم العثور على مجلد اللعبة: {game_name}"
             )
 
             return
@@ -914,7 +914,7 @@ class AppController(QObject):
             )
 
             self.messageChanged.emit(
-                f"ظ„ظ… ظٹطھظ… ط§ظ„ط¹ط«ظˆط± ط¹ظ„ظ‰ APK ط§ظ„ط®ط§طµ ط¨ظ€ {game_name}"
+                f"لم يتم العثور على APK الخاص بـ {game_name}"
             )
 
             return
