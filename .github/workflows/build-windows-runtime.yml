@@ -1,4 +1,4 @@
-name: Build Windows External Runtime
+name: Build Windows App Update
 
 on:
   workflow_dispatch:
@@ -16,65 +16,14 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build dependencies
+      - name: Install validation dependencies
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
+          pip install "PySide6==6.11.2" "psutil>=7,<8"
 
-      - name: Prepare external runtime
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $runtimeRoot = "package\runtime"
-          $sitePackages = "$runtimeRoot\Lib\site-packages"
-          $pythonZip = "python-3.12.1-embed-amd64.zip"
-          $pythonUrl = "https://www.python.org/ftp/python/3.12.1/$pythonZip"
-
-          New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
-          New-Item -ItemType Directory -Force -Path $sitePackages | Out-Null
-
-          Invoke-WebRequest `
-            -Uri $pythonUrl `
-            -OutFile $pythonZip
-
-          Expand-Archive `
-            -Path $pythonZip `
-            -DestinationPath $runtimeRoot `
-            -Force
-
-          & "python" -m pip install `
-            --target "$sitePackages" `
-            --upgrade `
-            "PySide6==6.11.2" `
-            "psutil>=7,<8"
-
-          $pth = Get-ChildItem `
-            "$runtimeRoot\python*._pth" |
-            Select-Object -First 1
-
-          if (-not $pth) {
-            throw "Python embeddable _pth file was not found."
-          }
-
-          @(
-            "python312.zip"
-            "."
-            "Lib\site-packages"
-            "import site"
-          ) | Set-Content `
-            -Path $pth.FullName `
-            -Encoding ASCII
-
-          & "$runtimeRoot\python.exe" -c `
-            "import sys; import PySide6, psutil; print('Python:', sys.version); print('PySide6:', PySide6.__version__); print('psutil:', psutil.__version__)"
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "External Python runtime validation failed."
-          }
-
-      - name: Prepare application
+      - name: Prepare application update
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -82,145 +31,81 @@ jobs:
           $appRoot = "package\KAFIA_NET_CONTROL_PRO"
 
           New-Item -ItemType Directory -Force -Path $appRoot | Out-Null
-          New-Item -ItemType Directory -Force -Path "package\platform-tools" | Out-Null
 
           Copy-Item "app_qml.py" "$appRoot\app_qml.py"
+          Copy-Item "games.json" "$appRoot\games.json"
           Copy-Item "qml" "$appRoot\qml" -Recurse
           Copy-Item "engine" "$appRoot\engine" -Recurse
           Copy-Item "assets" "$appRoot\assets" -Recurse
-          Copy-Item "games.json" "$appRoot\games.json"
 
-          Copy-Item `
-            "platform-tools\adb.exe", `
-            "platform-tools\AdbWinApi.dll", `
-            "platform-tools\AdbWinUsbApi.dll" `
-            "package\platform-tools\"
+          # Remove transient Python cache files if present.
+          Get-ChildItem $appRoot -Recurse -Directory -Filter "__pycache__" |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
-      - name: Validate external application runtime
+          Get-ChildItem $appRoot -Recurse -File -Filter "*.pyc" |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+
+      - name: Validate application package
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           $appRoot = (Resolve-Path "package\KAFIA_NET_CONTROL_PRO").Path
-          $runtimeRoot = (Resolve-Path "package\runtime").Path
-
           $env:PYTHONPATH = $appRoot
 
-          & "$runtimeRoot\python.exe" -c @"
-          import os
+          python -c @"
           import sys
           import PySide6
-          from PySide6.QtGui import QGuiApplication
-          from PySide6.QtQml import QQmlApplicationEngine
+          import psutil
+
+          sys.path.insert(0, r"$appRoot")
+
+          from engine.adb_engine import ADBEngine
+          from engine.transfer_engine import TransferEngine
+          from engine.path_manager import PathManager
+          from engine.game_config import get_game, find_game_folder
 
           print("Python:", sys.version)
           print("PySide6:", PySide6.__version__)
-          print("Application root:", r"$appRoot")
-          print("Runtime root:", r"$runtimeRoot")
-
-          os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
-
-          app = QGuiApplication([])
-          engine = QQmlApplicationEngine()
-          print("Qt/QML runtime initialized successfully")
+          print("Application package:", r"$appRoot")
+          print("External application imports: OK")
           "@
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "External application runtime validation failed."
-          }
-
-      - name: Create runtime package
+      - name: Create update package
         shell: pwsh
         run: |
-          Compress-Archive `
-            -Path "package\runtime" `
-            -DestinationPath "KAFIA_NET_CONTROL_PRO_Runtime.zip" `
-            -CompressionLevel Optimal
+          $ErrorActionPreference = "Stop"
 
-      - name: Create application update package
-        shell: pwsh
-        run: |
           Compress-Archive `
             -Path "package\KAFIA_NET_CONTROL_PRO" `
             -DestinationPath "KAFIA_NET_CONTROL_PRO_Update.zip" `
             -CompressionLevel Optimal
 
-      - name: Install Inno Setup
+      - name: Report update size
         shell: pwsh
         run: |
-          choco install innosetup --yes --no-progress
-
-      - name: Create installer script
-        shell: pwsh
-        run: |
-          @'
-          [Setup]
-          AppName=KAFIA NET CONTROL PRO
-          AppVersion=1.0.0
-          DefaultDirName=D:\games\programe files
-          DefaultGroupName=KAFIA NET CONTROL PRO
-          OutputDir=installer
-          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_Setup
-          Compression=lzma2
-          SolidCompression=yes
-          ArchitecturesInstallIn64BitMode=x64compatible
-          PrivilegesRequired=admin
-          Uninstallable=yes
-
-          [Files]
-          Source: "package\runtime\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs createallsubdirs
-          Source: "package\platform-tools\*"; DestDir: "{app}\platform-tools"; Flags: recursesubdirs createallsubdirs
-          Source: "package\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}\KAFIA_NET_CONTROL_PRO"; Flags: recursesubdirs createallsubdirs
-
-          [Icons]
-          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\KAFIA_NET_CONTROL_PRO\app_qml.py"""; WorkingDir: "{app}\KAFIA_NET_CONTROL_PRO"
-          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\KAFIA_NET_CONTROL_PRO\app_qml.py"""; WorkingDir: "{app}\KAFIA_NET_CONTROL_PRO"
-
-          [Run]
-          Filename: "{app}\runtime\pythonw.exe"; Parameters: """{app}\KAFIA_NET_CONTROL_PRO\app_qml.py"""; WorkingDir: "{app}\KAFIA_NET_CONTROL_PRO"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
-          '@ | Set-Content -Path installer.iss -Encoding UTF8
-
-      - name: Build installer
-        shell: pwsh
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-
-      - name: Report package sizes
-        shell: pwsh
-        run: |
-          Write-Host "=== RUNTIME SIZE ==="
-          $runtimeSize = (
-            Get-ChildItem "package\runtime" -Recurse -File |
-            Measure-Object Length -Sum
-          ).Sum
-          "{0:N2} MB" -f ($runtimeSize / 1MB)
-
-          Write-Host "=== APPLICATION SIZE ==="
           $appSize = (
             Get-ChildItem "package\KAFIA_NET_CONTROL_PRO" -Recurse -File |
             Measure-Object Length -Sum
           ).Sum
+
+          $zipSize = (
+            Get-Item "KAFIA_NET_CONTROL_PRO_Update.zip"
+          ).Length
+
+          Write-Host "=== APPLICATION SIZE ==="
           "{0:N2} MB" -f ($appSize / 1MB)
 
-          Write-Host "=== ADB SIZE ==="
-          $adbSize = (
-            Get-ChildItem "package\platform-tools" -Recurse -File |
-            Measure-Object Length -Sum
-          ).Sum
-          "{0:N2} MB" -f ($adbSize / 1MB)
+          Write-Host "=== UPDATE ZIP SIZE ==="
+          "{0:N2} MB" -f ($zipSize / 1MB)
 
-          Write-Host "=== ARTIFACTS ==="
-          Get-ChildItem -File `
-            "KAFIA_NET_CONTROL_PRO_Runtime.zip", `
-            "KAFIA_NET_CONTROL_PRO_Update.zip", `
-            "installer\KAFIA_NET_CONTROL_PRO_Setup.exe" |
-            Select-Object Name, Length
+          Write-Host "=== FILES ==="
+          Get-ChildItem "package\KAFIA_NET_CONTROL_PRO" -Recurse -File |
+            Sort-Object FullName |
+            Select-Object FullName, Length
 
-      - name: Upload packages
+      - name: Upload application update
         uses: actions/upload-artifact@v4
         with:
-          name: KAFIA_NET_CONTROL_PRO-External-Runtime
-          path: |
-            KAFIA_NET_CONTROL_PRO_Runtime.zip
-            KAFIA_NET_CONTROL_PRO_Update.zip
-            installer/KAFIA_NET_CONTROL_PRO_Setup.exe
+          name: KAFIA_NET_CONTROL_PRO-Update
+          path: KAFIA_NET_CONTROL_PRO_Update.zip
