@@ -56,7 +56,7 @@ jobs:
 
           [Icons]
           Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
-          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA NET CONTROL PRO.exe"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
 
           [Run]
           Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent

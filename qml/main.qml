@@ -1124,6 +1124,10 @@ ApplicationWindow {
                 spacing: 8
                 model: window.transferDevices
 
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                }
+
                 delegate: Rectangle {
                     width: ListView.view.width
                     height: 148
