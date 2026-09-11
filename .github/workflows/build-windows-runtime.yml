@@ -1,4 +1,4 @@
-name: Build Windows App Update
+name: Build Windows App Installer
 
 on:
   workflow_dispatch:
@@ -23,7 +23,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install "PySide6==6.11.2" "psutil>=7,<8"
 
-      - name: Prepare application update
+      - name: Prepare application
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -38,14 +38,13 @@ jobs:
           Copy-Item "engine" "$appRoot\engine" -Recurse
           Copy-Item "assets" "$appRoot\assets" -Recurse
 
-          # Remove transient Python cache files if present.
           Get-ChildItem $appRoot -Recurse -Directory -Filter "__pycache__" |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
           Get-ChildItem $appRoot -Recurse -File -Filter "*.pyc" |
             Remove-Item -Force -ErrorAction SilentlyContinue
 
-      - name: Validate application package
+      - name: Validate application
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -67,21 +66,48 @@ jobs:
 
           print("Python:", sys.version)
           print("PySide6:", PySide6.__version__)
-          print("Application package:", r"$appRoot")
-          print("External application imports: OK")
+          print("Application imports: OK")
           "@
 
-      - name: Create update package
+      - name: Install Inno Setup
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          choco install innosetup --yes --no-progress
 
-          Compress-Archive `
-            -Path "package\KAFIA_NET_CONTROL_PRO" `
-            -DestinationPath "KAFIA_NET_CONTROL_PRO_Update.zip" `
-            -CompressionLevel Optimal
+      - name: Create installer script
+        shell: pwsh
+        run: |
+          @'
+          [Setup]
+          AppName=KAFIA NET CONTROL PRO
+          AppVersion=1.0.0
+          DefaultDirName=D:\games\programe files\KAFIA_NET_CONTROL_PRO
+          DefaultGroupName=KAFIA NET CONTROL PRO
+          OutputDir=installer
+          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_Setup
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesInstallIn64BitMode=x64compatible
+          PrivilegesRequired=admin
+          Uninstallable=yes
 
-      - name: Report update size
+          [Files]
+          Source: "package\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\..\runtime\pythonw.exe"; Parameters: """{app}\app_qml.py"""; WorkingDir: "{app}"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\..\runtime\pythonw.exe"; Parameters: """{app}\app_qml.py"""; WorkingDir: "{app}"
+
+          [Run]
+          Filename: "{app}\..\runtime\pythonw.exe"; Parameters: """{app}\app_qml.py"""; WorkingDir: "{app}"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -Path installer.iss -Encoding UTF8
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Report installer size
         shell: pwsh
         run: |
           $appSize = (
@@ -89,23 +115,18 @@ jobs:
             Measure-Object Length -Sum
           ).Sum
 
-          $zipSize = (
-            Get-Item "KAFIA_NET_CONTROL_PRO_Update.zip"
+          $installerSize = (
+            Get-Item "installer\KAFIA_NET_CONTROL_PRO_Setup.exe"
           ).Length
 
           Write-Host "=== APPLICATION SIZE ==="
           "{0:N2} MB" -f ($appSize / 1MB)
 
-          Write-Host "=== UPDATE ZIP SIZE ==="
-          "{0:N2} MB" -f ($zipSize / 1MB)
+          Write-Host "=== INSTALLER SIZE ==="
+          "{0:N2} MB" -f ($installerSize / 1MB)
 
-          Write-Host "=== FILES ==="
-          Get-ChildItem "package\KAFIA_NET_CONTROL_PRO" -Recurse -File |
-            Sort-Object FullName |
-            Select-Object FullName, Length
-
-      - name: Upload application update
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: KAFIA_NET_CONTROL_PRO-Update
-          path: KAFIA_NET_CONTROL_PRO_Update.zip
+          name: KAFIA_NET_CONTROL_PRO-Installer
+          path: installer/KAFIA_NET_CONTROL_PRO_Setup.exe
