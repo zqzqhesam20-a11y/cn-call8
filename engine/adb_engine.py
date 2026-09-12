@@ -259,11 +259,30 @@ class ADBEngine(QObject):
             if not manufacturer:
                 manufacturer = "Android"
 
+            # Prefer the user-assigned Android device name.
+            # Fall back to manufacturer + model when unavailable.
+            device_name_result = self._run(
+                [
+                    "-s",
+                    serial,
+                    "shell",
+                    "settings",
+                    "get",
+                    "global",
+                    "device_name"
+                ]
+            )
+
+            device_name = device_name_result.stdout.strip()
+
+            if not device_name or device_name.lower() in {"null", "unknown"}:
+                device_name = f"{manufacturer} {model}".strip()
+
             devices.append({
                 "serial": serial,
                 "model": model,
                 "manufacturer": manufacturer,
-                "name": f"{manufacturer} {model} [{serial}]"
+                "name": device_name
             })
 
         self.devicesChanged.emit(devices)
@@ -333,6 +352,74 @@ class ADBEngine(QObject):
 
         return 0
 
+    def _emit_adb_live_progress(
+        self,
+        line,
+        completed_bytes,
+        current_file_size,
+        source_total_bytes,
+        start_time
+    ):
+        match = re.search(
+            r'(\d+)%\s+(\d+(?:\.\d+)?)([KMGTP]?B)/s',
+            line
+        )
+
+        if not match:
+            return
+
+        percent_in_file = int(match.group(1))
+
+        speed_value = float(match.group(2))
+
+        speed_unit = match.group(3)
+
+        multipliers = {
+            "B": 1,
+            "KB": 1024,
+            "MB": 1024 ** 2,
+            "GB": 1024 ** 3,
+            "TB": 1024 ** 4
+        }
+
+        speed = speed_value * multipliers.get(
+            speed_unit,
+            1
+        )
+
+        current_bytes = (
+            completed_bytes
+            + (
+                current_file_size
+                * percent_in_file
+                / 100.0
+            )
+        )
+
+        percent = (
+            int(current_bytes * 100 / source_total_bytes)
+            if source_total_bytes > 0
+            else percent_in_file
+        )
+
+        if speed > 0 and source_total_bytes > 0:
+            remaining_bytes = max(
+                source_total_bytes - current_bytes,
+                0
+            )
+            remaining_seconds = int(
+                remaining_bytes / speed
+            )
+            eta = self._format_time(remaining_seconds)
+        else:
+            eta = "00:00"
+
+        self.progressChanged.emit(
+            max(0, min(percent, 100)),
+            self._format_size(speed) + "/s",
+            eta
+        )
+
     def _parse_progress(self, line):
 
         match = re.search(
@@ -394,6 +481,7 @@ class ADBEngine(QObject):
                     encoding="utf-8",
                     errors="ignore",
                     timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
                 )
 
                 if (
@@ -440,6 +528,7 @@ class ADBEngine(QObject):
                 encoding="utf-8",
                 errors="ignore",
                 timeout=10,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
             return result.returncode == 0
@@ -514,6 +603,7 @@ class ADBEngine(QObject):
                 text=True,
                 encoding="utf-8",
                 errors="ignore",
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
             if mkdir_result.returncode != 0:
@@ -555,6 +645,7 @@ class ADBEngine(QObject):
                 text=True,
                 encoding="utf-8",
                 errors="ignore",
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
             if write_result.returncode != 0:
@@ -597,6 +688,7 @@ class ADBEngine(QObject):
                 text=True,
                 encoding="utf-8",
                 errors="ignore",
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
 
             if cleanup_result.returncode != 0:
@@ -717,6 +809,7 @@ class ADBEngine(QObject):
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         stdin=subprocess.DEVNULL,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
                     )
 
                     remote_parent = remote_file.rsplit('/', 1)[0]
@@ -737,6 +830,7 @@ class ADBEngine(QObject):
                         text=True,
                         encoding='utf-8',
                         errors='ignore',
+                        creationflags=subprocess.CREATE_NO_WINDOW,
                     )
 
                     if mkdir_result.returncode != 0:
@@ -781,18 +875,93 @@ class ADBEngine(QObject):
                         self._current_process = process
 
                     start_time = time.monotonic()
+                    progress_buffer = ''
+                    stderr_chunks = []
+                    progress_stop = threading.Event()
+
+                    def _consume_adb_output():
+                        nonlocal progress_buffer
+
+                        stream = process.stderr
+                        if stream is None:
+                            return
+
+                        while not progress_stop.is_set():
+                            try:
+                                data = stream.read(1024)
+                            except Exception:
+                                break
+
+                            if not data:
+                                break
+
+                            stderr_chunks.append(data)
+
+                            try:
+                                text = data.decode(
+                                    'utf-8',
+                                    errors='ignore'
+                                )
+                            except Exception:
+                                text = ''
+
+                            if not text:
+                                continue
+
+                            progress_buffer += text
+
+                            parts = re.split(
+                                r'[\r\n]+',
+                                progress_buffer
+                            )
+
+                            progress_buffer = (
+                                parts.pop()
+                                if parts
+                                else ''
+                            )
+
+                            for line in parts:
+                                self._emit_adb_live_progress(
+                                    line,
+                                    completed_bytes,
+                                    local_file.stat().st_size,
+                                    source_total_bytes,
+                                    start_time
+                                )
+
+                        if progress_buffer:
+                            self._emit_adb_live_progress(
+                                progress_buffer,
+                                completed_bytes,
+                                local_file.stat().st_size,
+                                source_total_bytes,
+                                start_time
+                            )
+
+                    progress_thread = threading.Thread(
+                        target=_consume_adb_output,
+                        daemon=True
+                    )
+                    progress_thread.start()
 
                     return_code = process.wait()
 
+                    progress_stop.set()
+
+                    try:
+                        progress_thread.join(timeout=2.0)
+                    except Exception:
+                        pass
+
                     stderr_text = ''
                     try:
-                        if process.stderr is not None:
-                            data = process.stderr.read()
-                            if data:
-                                stderr_text = data.decode(
-                                    'utf-8',
-                                    errors='ignore'
-                                ).strip()
+                        stderr_text = b''.join(
+                            stderr_chunks
+                        ).decode(
+                            'utf-8',
+                            errors='ignore'
+                        ).strip()
                     except Exception:
                         stderr_text = ''
 
@@ -826,6 +995,7 @@ class ADBEngine(QObject):
                                 encoding='utf-8',
                                 errors='ignore',
                                 timeout=5,
+                                creationflags=subprocess.CREATE_NO_WINDOW,
                             )
                             device_connected = (
                                 state.returncode == 0
@@ -900,6 +1070,7 @@ class ADBEngine(QObject):
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             stdin=subprocess.DEVNULL,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
                         )
                         completed_bytes += local_file.stat().st_size
                         completed_files += 1
@@ -922,6 +1093,7 @@ class ADBEngine(QObject):
                         text=True,
                         encoding='utf-8',
                         errors='ignore',
+                        creationflags=subprocess.CREATE_NO_WINDOW,
                     )
 
                     if rename_result.returncode != 0:

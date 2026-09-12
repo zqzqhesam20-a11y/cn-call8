@@ -808,7 +808,7 @@ ApplicationWindow {
                                               ? window.adbDeviceText
                                               : "لا يوجد جهاز متصل"
 
-                                        color: "#B9C3D2"
+                                        color: "#FFFFFF"
                                         font.pixelSize: 10
 
                                         elide: Text.ElideRight
