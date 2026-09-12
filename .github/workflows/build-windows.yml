@@ -157,8 +157,7 @@ jobs:
           Flags: nowait postinstall skipifsilent
 
           [UninstallDelete]
-          Type: filesandordirs
-          Name: "{app}"
+          Type: filesandordirs; Name: "{app}"
           '@ | Set-Content -Path $iss -Encoding UTF8
 
           New-Item -ItemType Directory -Force -Path "installer" | Out-Null
