@@ -150,11 +150,7 @@ jobs:
           Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\..\runtime\pythonw.exe"; Parameters: """{app}\app_qml.py"""; WorkingDir: "{app}"
 
           [Run]
-          Filename: "{app}\..\runtime\pythonw.exe"
-          Parameters: """{app}\app_qml.py"""
-          WorkingDir: "{app}"
-          Description: "تشغيل KAFIA NET CONTROL PRO"
-          Flags: nowait postinstall skipifsilent
+          Filename: "{app}\..\runtime\pythonw.exe"; Parameters: """{app}\app_qml.py"""; WorkingDir: "{app}"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
 
           [UninstallDelete]
           Type: filesandordirs; Name: "{app}"
