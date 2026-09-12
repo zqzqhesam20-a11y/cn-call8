@@ -42,6 +42,7 @@ ApplicationWindow {
     property var selectedAdbSerials: []
     property bool operationBusy: false
     property var transferDevices: []
+    property bool transferPanelDismissed: false
     property string operationMessage: ""
 
 
@@ -1018,6 +1019,8 @@ ApplicationWindow {
 
         function onTransferBatchChanged(devices) {
             window.transferDevices = devices
+            if (devices && devices.length > 0)
+                window.transferPanelDismissed = false
         }
 
         function onOperationFinished(message) {
@@ -1066,7 +1069,7 @@ ApplicationWindow {
     Rectangle {
         id: transferPanel
 
-        visible: window.transferDevices.length > 0
+        visible: window.transferDevices.length > 0 && !window.transferPanelDismissed
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.rightMargin: 24
@@ -1102,10 +1105,59 @@ ApplicationWindow {
                     height: 1
                 }
 
-                Button {
-                    visible: window.operationBusy
-                    text: "إلغاء الكل"
-                    onClicked: appController.cancelTransfer()
+                Row {
+                    spacing: 8
+
+                    Button {
+                        width: 104
+                        height: 34
+                        visible: window.operationBusy
+                        text: "إلغاء الكل"
+                        onClicked: appController.cancelTransfer()
+
+                        background: Rectangle {
+                            radius: 10
+                            color: parent.pressed ? "#7A2734"
+                                   : parent.hovered ? "#542630"
+                                   : "#2C1B24"
+                            border.width: 1
+                            border.color: "#944052"
+                        }
+
+                        contentItem: Text {
+                            text: parent.text
+                            color: "#FFC0C7"
+                            font.pixelSize: 12
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+
+                    Button {
+                        width: 34
+                        height: 34
+                        text: "✕"
+                        onClicked: window.transferPanelDismissed = true
+
+                        background: Rectangle {
+                            radius: 10
+                            color: parent.pressed ? "#343C4B"
+                                   : parent.hovered ? "#252E3D"
+                                   : "#1A2230"
+                            border.width: 1
+                            border.color: "#3A4659"
+                        }
+
+                        contentItem: Text {
+                            text: parent.text
+                            color: "#C6CEDB"
+                            font.pixelSize: 15
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
                 }
             }
 
@@ -1123,6 +1175,11 @@ ApplicationWindow {
                 clip: true
                 spacing: 8
                 model: window.transferDevices
+
+                ScrollBar.vertical: ScrollBar {
+                    policy: ScrollBar.AsNeeded
+                }
+
 
                 delegate: Rectangle {
                     width: ListView.view.width
@@ -1231,10 +1288,30 @@ ApplicationWindow {
                                      && modelData.status !== "اكتمل"
                                      && modelData.status !== "فشل"
                                      && modelData.status !== "ملغي"
+                            width: 88
+                            height: 30
                             text: "إلغاء"
                             onClicked: appController.cancelDevice(
                                 modelData.serial
                             )
+
+                            background: Rectangle {
+                                radius: 9
+                                color: parent.pressed ? "#702630"
+                                       : parent.hovered ? "#51242D"
+                                       : "#281B22"
+                                border.width: 1
+                                border.color: "#8D3A49"
+                            }
+
+                            contentItem: Text {
+                                text: parent.text
+                                color: "#FFB6BF"
+                                font.pixelSize: 11
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
                         }
                     }
                 }

@@ -1,4 +1,5 @@
 import os
+import shlex
 import re
 import subprocess
 import threading
@@ -118,12 +119,22 @@ class ADBEngine(QObject):
         self._cancelled_by_user = False
 
     def _get_adb_path(self):
+        # Prefer the shared fixed ADB installation used by all
+        # KAFIA NET CONTROL PRO updates.
+        external_adb = Path(
+            r"D:\games\programe files\platform-tools\adb.exe"
+        )
 
-        adb = BASE_DIR / "platform-tools" / "adb.exe"
+        if external_adb.is_file():
+            return str(external_adb)
 
-        if adb.exists():
-            return str(adb)
+        # Development/local fallback.
+        local_adb = BASE_DIR / "platform-tools" / "adb.exe"
 
+        if local_adb.is_file():
+            return str(local_adb)
+
+        # Final fallback: allow adb.exe from PATH.
         return "adb"
 
     def _run(self, args, timeout=None):
@@ -384,7 +395,67 @@ class ADBEngine(QObject):
 
                 return
 
-            destination = destination.rstrip("/") + "/"
+            # Treat the configured destination as the exact root
+            # of the copy. The trailing "/." prevents adb from
+            # introducing the source directory name underneath it.
+            destination = destination.rstrip("/") + "/."
+
+            # --------------------------------------------------------
+            # PRE-FLIGHT DESTINATION WRITE CHECK
+            # Verify actual ADB write access before a large transfer.
+            # --------------------------------------------------------
+            check_path = destination.rstrip('/.') or destination
+
+            check_script = (
+                'p=' + shlex.quote(check_path) + '; '
+                'mkdir -p "$p" && '
+                'f="$p/.cncall_write_test_$$" && '
+                'printf x > "$f" && rm -f "$f"'
+            )
+
+            check_command = [
+                self.adb,
+                '-s',
+                device,
+                'shell',
+                'sh',
+                '-c',
+                check_script,
+            ]
+
+            print(
+                'ADB DESTINATION WRITE CHECK:',
+                ' '.join(check_command)
+            )
+
+            check_result = subprocess.run(
+                check_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding='utf-8',
+                errors='ignore',
+            )
+
+            if check_result.returncode != 0:
+                check_error = (
+                    check_result.stderr.strip()
+                    or check_result.stdout.strip()
+                    or 'Permission denied'
+                )
+                print(
+                    'ADB DESTINATION WRITE CHECK FAILED:',
+                    check_error
+                )
+                self.statusChanged.emit(
+                    'تعذر الكتابة إلى مجلد الوجهة'
+                )
+                self.finished.emit(
+                    False,
+                    'فشل الوصول إلى وجهة النسخ عبر ADB: ' + check_error
+                )
+                return
 
             total_bytes = (
                 sum(
