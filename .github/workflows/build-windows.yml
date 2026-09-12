@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Windows App-Only Installer
 
 on:
   workflow_dispatch:
@@ -11,64 +11,178 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
+      - name: Prepare application files
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) {
-            pip install -r requirements.txt
-          }
-          pip install pyinstaller
+          $ErrorActionPreference = "Stop"
 
-      - name: Build EXE
-        run: |
-          python -m PyInstaller --clean --noconfirm KAFIA_NET_CONTROL_PRO.spec
+          $root = Join-Path $env:GITHUB_WORKSPACE "package\KAFIA_NET_CONTROL_PRO"
+
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+          # Main application files only.
+          Copy-Item "app_qml.py" $root -Force
+          Copy-Item "games.json" $root -Force
+
+          # Copy only real QML source files; never copy backups.
+          New-Item -ItemType Directory -Force -Path (Join-Path $root "qml") | Out-Null
+          Get-ChildItem "qml" -Recurse -File |
+            Where-Object {
+              $_.Name -notlike "*.bak-*" -and
+              $_.Name -ne "main_login_test.qml" -and
+              $_.Extension -in ".qml", ".js"
+            } |
+            ForEach-Object {
+              $relative = $_.FullName.Substring((Resolve-Path "qml").Path.Length).TrimStart("\")
+              $destination = Join-Path $root ("qml\" + $relative)
+              $destinationDir = Split-Path $destination -Parent
+              New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+              Copy-Item $_.FullName $destination -Force
+            }
+
+          # Copy only real Python source files from engine.
+          New-Item -ItemType Directory -Force -Path (Join-Path $root "engine") | Out-Null
+          Get-ChildItem "engine" -Recurse -File |
+            Where-Object {
+              $_.Name -notlike "*.bak-*" -and
+              $_.Extension -eq ".py" -and
+              $_.Name -notlike "*.pyc"
+            } |
+            ForEach-Object {
+              $relative = $_.FullName.Substring((Resolve-Path "engine").Path.Length).TrimStart("\")
+              $destination = Join-Path $root ("engine\" + $relative)
+              $destinationDir = Split-Path $destination -Parent
+              New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+              Copy-Item $_.FullName $destination -Force
+            }
+
+          # Copy real application assets only.
+          New-Item -ItemType Directory -Force -Path (Join-Path $root "assets") | Out-Null
+          Get-ChildItem "assets" -Recurse -File |
+            Where-Object {
+              $_.Name -notlike "*.bak-*" -and
+              $_.Extension -notin ".pyc"
+            } |
+            ForEach-Object {
+              $relative = $_.FullName.Substring((Resolve-Path "assets").Path.Length).TrimStart("\")
+              $destination = Join-Path $root ("assets\" + $relative)
+              $destinationDir = Split-Path $destination -Parent
+              New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+              Copy-Item $_.FullName $destination -Force
+            }
+
+          Write-Host "=== FINAL APP PACKAGE ==="
+          Get-ChildItem $root -Recurse -File |
+            Select-Object FullName, Length
+
+          $forbidden = Get-ChildItem $root -Recurse -File |
+            Where-Object {
+              $_.Name -like "*.bak-*" -or
+              $_.Name -like "*.pyc" -or
+              $_.Name -like "*.CMD_*" -or
+              $_.Name -like "*.OK" -or
+              $_.Name -like "*.WORKING" -or
+              $_.Name -like "*.CONFIRMED" -or
+              $_.Name -like "*.FINAL"
+            }
+
+          if ($forbidden) {
+            Write-Host "FORBIDDEN FILES FOUND:"
+            $forbidden | Select-Object FullName
+            throw "Application package contains backup/test marker files."
+          }
+
+          $size = (Get-ChildItem $root -Recurse -File |
+            Measure-Object -Property Length -Sum).Sum
+
+          Write-Host ("FINAL APP PACKAGE SIZE: {0:N0} bytes ({1:N2} MB)" -f $size, ($size / 1MB))
 
       - name: Install Inno Setup
         shell: pwsh
         run: |
-          choco install innosetup --yes --no-progress
+          $ErrorActionPreference = "Stop"
 
-      - name: Create Installer script
+          choco install innosetup --no-progress -y
+
+      - name: Build lightweight installer
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
+          $iss = Join-Path $env:GITHUB_WORKSPACE "installer.iss"
+
           @'
+          #define MyAppName "KAFIA NET CONTROL PRO"
+          #define MyAppVersion "1.0.0"
+          #define MyAppPublisher "KAFIA NET"
+          #define MyAppExeName "app_qml.py"
+
           [Setup]
-          AppName=KAFIA NET CONTROL PRO
-          AppVersion=1.0.0
-          DefaultDirName={autopf}\KAFIA NET CONTROL PRO
-          DefaultGroupName=KAFIA NET CONTROL PRO
+          AppId={{C8B9F1D0-9F51-4A6C-9B35-KAFIA-NET-CONTROL}}
+          AppName={#MyAppName}
+          AppVersion={#MyAppVersion}
+          AppPublisher={#MyAppPublisher}
+
+          DefaultDirName=D:\games\programe files\KAFIA_NET_CONTROL_PRO
+          DisableProgramGroupPage=yes
+          PrivilegesRequired=admin
+
           OutputDir=installer
           OutputBaseFilename=KAFIA_NET_CONTROL_PRO_Setup
-          Compression=lzma2
+          Compression=lzma2/max
           SolidCompression=yes
+
           ArchitecturesInstallIn64BitMode=x64compatible
-          PrivilegesRequired=admin
+
           Uninstallable=yes
+          CreateUninstallRegKey=yes
 
           [Files]
-          Source: "dist\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+          Source: "package\KAFIA_NET_CONTROL_PRO\app_qml.py"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "package\KAFIA_NET_CONTROL_PRO\games.json"; DestDir: "{app}"; Flags: ignoreversion
+
+          Source: "package\KAFIA_NET_CONTROL_PRO\qml\*"; DestDir: "{app}\qml"; Flags: ignoreversion recursesubdirs createallsubdirs
+          Source: "package\KAFIA_NET_CONTROL_PRO\engine\*"; DestDir: "{app}\engine"; Flags: ignoreversion recursesubdirs createallsubdirs
+          Source: "package\KAFIA_NET_CONTROL_PRO\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
-          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
-          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA NET CONTROL PRO.exe"
+          Name: "{autoprograms}\{#MyAppName}"
+          Filename: "{app}\..\runtime\pythonw.exe"
+          Parameters: """{app}\app_qml.py"""
+          WorkingDir: "{app}"
+
+          Name: "{autodesktop}\{#MyAppName}"
+          Filename: "{app}\..\runtime\pythonw.exe"
+          Parameters: """{app}\app_qml.py"""
+          WorkingDir: "{app}"
 
           [Run]
-          Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
-          '@ | Set-Content -Path installer.iss -Encoding UTF8
+          Filename: "{app}\..\runtime\pythonw.exe"
+          Parameters: """{app}\app_qml.py"""
+          WorkingDir: "{app}"
+          Description: "تشغيل KAFIA NET CONTROL PRO"
+          Flags: nowait postinstall skipifsilent
 
-      - name: Build Installer
-        shell: pwsh
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          [UninstallDelete]
+          Type: filesandordirs
+          Name: "{app}"
+          '@ | Set-Content -Path $iss -Encoding UTF8
 
-      - name: Upload Windows packages
+          New-Item -ItemType Directory -Force -Path "installer" | Out-Null
+
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" $iss
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
+          }
+
+          Write-Host "=== INSTALLER ==="
+          Get-ChildItem installer -File |
+            Select-Object Name, Length
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: KAFIA_NET_CONTROL_PRO-Windows
+          name: KAFIA_NET_CONTROL_PRO_AppOnly_Installer
           path: installer/KAFIA_NET_CONTROL_PRO_Setup.exe
+          if-no-files-found: error

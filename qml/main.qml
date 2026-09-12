@@ -1087,25 +1087,24 @@ ApplicationWindow {
             anchors.margins: 16
             spacing: 10
 
-            Row {
+            RowLayout {
                 width: parent.width
-                spacing: 10
+                height: 38
+                spacing: 8
 
                 Text {
+                    Layout.fillWidth: true
                     text: window.operationBusy
                           ? "العملية قيد التنفيذ"
                           : "نتيجة العملية"
                     color: "#00D9FF"
                     font.pixelSize: 16
                     font.bold: true
-                }
-
-                Item {
-                    width: parent.width - 180
-                    height: 1
+                    elide: Text.ElideRight
                 }
 
                 Row {
+                    Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                     spacing: 8
 
                     Button {

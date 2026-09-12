@@ -1,5 +1,4 @@
 import os
-import shlex
 import re
 import subprocess
 import threading
@@ -369,6 +368,89 @@ class ADBEngine(QObject):
             "00:00"
         )
 
+    def _wait_for_device_reconnect(self, device):
+        self.statusChanged.emit(
+            "الهاتف مفصول — بانتظار إعادة التوصيل..."
+        )
+
+        print(
+            "ADB DEVICE DISCONNECTED; WAITING:",
+            device
+        )
+
+        while not self._cancel_event.is_set():
+            try:
+                result = subprocess.run(
+                    [
+                        self.adb,
+                        "-s",
+                        device,
+                        "get-state",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL,
+                    text=True,
+                    encoding="utf-8",
+                    errors="ignore",
+                    timeout=5,
+                )
+
+                if (
+                    result.returncode == 0
+                    and result.stdout.strip().lower() == "device"
+                ):
+                    self.statusChanged.emit(
+                        "تمت إعادة توصيل الهاتف — استئناف النقل..."
+                    )
+
+                    print(
+                        "ADB DEVICE RECONNECTED:",
+                        device
+                    )
+
+                    return True
+
+            except Exception as e:
+                print(
+                    "ADB RECONNECT CHECK ERROR:",
+                    e
+                )
+
+            time.sleep(2.0)
+
+        return False
+
+    def _remote_file_exists(self, device, remote_file):
+        try:
+            result = subprocess.run(
+                [
+                    self.adb,
+                    "-s",
+                    device,
+                    "shell",
+                    "test",
+                    "-f",
+                    remote_file,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=10,
+            )
+
+            return result.returncode == 0
+
+        except Exception as e:
+            print(
+                "ADB REMOTE FILE CHECK ERROR:",
+                e
+            )
+            return None
+
     def _push_thread(
         self,
         device,
@@ -401,61 +483,127 @@ class ADBEngine(QObject):
             destination = destination.rstrip("/") + "/."
 
             # --------------------------------------------------------
+            # --------------------------------------------------------
             # PRE-FLIGHT DESTINATION WRITE CHECK
-            # Verify actual ADB write access before a large transfer.
+            # Direct ADB shell commands only.
             # --------------------------------------------------------
             check_path = destination.rstrip('/.') or destination
-
-            check_script = (
-                'p=' + shlex.quote(check_path) + '; '
-                'mkdir -p "$p" && '
-                'f="$p/.cncall_write_test_$$" && '
-                'printf x > "$f" && rm -f "$f"'
+            check_file = (
+                check_path.rstrip('/')
+                + '/.cncall_write_test'
             )
-
-            check_command = [
-                self.adb,
-                '-s',
-                device,
-                'shell',
-                'sh',
-                '-c',
-                check_script,
-            ]
 
             print(
-                'ADB DESTINATION WRITE CHECK:',
-                ' '.join(check_command)
+                "ADB DESTINATION WRITE CHECK:",
+                check_path
             )
 
-            check_result = subprocess.run(
-                check_command,
+            mkdir_result = subprocess.run(
+                [
+                    self.adb,
+                    "-s",
+                    device,
+                    "shell",
+                    "mkdir",
+                    "-p",
+                    check_path,
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
                 text=True,
-                encoding='utf-8',
-                errors='ignore',
+                encoding="utf-8",
+                errors="ignore",
             )
 
-            if check_result.returncode != 0:
+            if mkdir_result.returncode != 0:
                 check_error = (
-                    check_result.stderr.strip()
-                    or check_result.stdout.strip()
-                    or 'Permission denied'
+                    mkdir_result.stderr.strip()
+                    or mkdir_result.stdout.strip()
+                    or "mkdir failed"
                 )
+
                 print(
-                    'ADB DESTINATION WRITE CHECK FAILED:',
+                    "ADB DESTINATION MKDIR CHECK FAILED:",
                     check_error
                 )
+
                 self.statusChanged.emit(
-                    'تعذر الكتابة إلى مجلد الوجهة'
+                    "تعذر تجهيز مجلد الوجهة"
                 )
+
                 self.finished.emit(
                     False,
-                    'فشل الوصول إلى وجهة النسخ عبر ADB: ' + check_error
+                    "فشل تجهيز وجهة النسخ عبر ADB: "
+                    + check_error
                 )
+
                 return
+
+            write_result = subprocess.run(
+                [
+                    self.adb,
+                    "-s",
+                    device,
+                    "shell",
+                    "touch",
+                    check_file,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
+
+            if write_result.returncode != 0:
+                check_error = (
+                    write_result.stderr.strip()
+                    or write_result.stdout.strip()
+                    or "write test failed"
+                )
+
+                print(
+                    "ADB DESTINATION WRITE CHECK FAILED:",
+                    check_error
+                )
+
+                self.statusChanged.emit(
+                    "تعذر الكتابة إلى مجلد الوجهة"
+                )
+
+                self.finished.emit(
+                    False,
+                    "فشل الوصول إلى وجهة النسخ عبر ADB: "
+                    + check_error
+                )
+
+                return
+
+            cleanup_result = subprocess.run(
+                [
+                    self.adb,
+                    "-s",
+                    device,
+                    "shell",
+                    "rm",
+                    "-f",
+                    check_file,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+            )
+
+            if cleanup_result.returncode != 0:
+                print(
+                    "ADB PREFLIGHT CLEANUP WARNING:",
+                    cleanup_result.stderr.strip()
+                )
 
             total_bytes = (
                 sum(
@@ -478,364 +626,363 @@ class ADBEngine(QObject):
 
             self._pause_event.set()
 
-            command = [
-                self.adb,
-                "-s",
-                device,
-                "push",
-                str(source_path),
-                destination
-            ]
 
-            print(
-                "ADB FAST PUSH:",
-                " ".join(command)
-            )
-
-            print(
-                "STARTING DIRECT ADB TRANSFER"
-            )
-
+            # RESUMABLE FILE-BY-FILE TRANSFER
+            #
+            # Existing final files are never overwritten.
+            # The current file is first pushed to .cncall.part.
+            # A disconnected phone is never reported as a permanent
+            # failure: wait for reconnect, reconcile, then continue.
             # --------------------------------------------------------
-            # DIRECT ADB PROCESS
-            # No CMD wrapper.
-            # process.pid is the real adb.exe PID.
-            # --------------------------------------------------------
+            remote_root = destination.rstrip('/.')
 
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= (
-                subprocess.STARTF_USESHOWWINDOW
-            )
-            startupinfo.wShowWindow = (
-                subprocess.SW_HIDE
-            )
+            if source_path.is_dir():
+                local_files = [
+                    f
+                    for f in source_path.rglob('*')
+                    if f.is_file()
+                ]
+            else:
+                local_files = [source_path]
 
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                startupinfo=startupinfo,
-                creationflags=(
-                    subprocess.CREATE_NO_WINDOW
-                )
+            source_total_bytes = sum(
+                f.stat().st_size
+                for f in local_files
             )
 
-            with self._process_lock:
-                self._current_process = process
-                cancelled = self._cancel_event.is_set()
+            completed_bytes = 0
+            skipped_files = 0
+            completed_files = 0
 
-            if cancelled:
-                process.terminate()
+            for local_file in local_files:
 
-            start_time = time.monotonic()
-
-            # --------------------------------------------------------
-            # INTERNAL ADB I/O LIVE PROGRESS
-            # --------------------------------------------------------
-
-            progress_stop = threading.Event()
-
-            progress_state = {
-                "bytes": 0,
-                "speed": 0.0,
-                "last_percent": -1,
-                "speed_samples": []
-            }
-
-            def io_progress_callback(
-                io_bytes,
-                io_speed
-            ):
-
-                if progress_stop.is_set():
+                if self._cancel_event.is_set():
+                    self.finished.emit(
+                        False,
+                        "تم إلغاء النسخ"
+                    )
                     return
 
-                delta_bytes = max(
-                    int(io_bytes),
-                    0
-                )
-
-                progress_state["bytes"] += (
-                    delta_bytes
-                )
-
-                # ----------------------------------------------------
-                # SMOOTH LIVE SPEED
-                # Average the latest samples so the displayed speed
-                # and ETA do not jump sharply every 200 ms.
-                # ----------------------------------------------------
-
-                raw_speed = max(
-                    float(io_speed),
-                    0.0
-                )
-
-                samples = progress_state[
-                    "speed_samples"
-                ]
-
-                if raw_speed > 0:
-                    samples.append(raw_speed)
-
-                if len(samples) > 8:
-                    del samples[:-8]
-
-                if samples:
-                    speed = (
-                        sum(samples)
-                        / len(samples)
+                if source_path.is_dir():
+                    relative = local_file.relative_to(source_path)
+                    remote_file = (
+                        remote_root
+                        + '/'
+                        + '/'.join(relative.parts)
                     )
                 else:
-                    speed = 0.0
-
-                progress_state["speed"] = speed
-
-                transferred_bytes = min(
-                    progress_state["bytes"],
-                    total_bytes
-                )
-
-                if total_bytes > 0:
-
-                    percent = int(
-                        transferred_bytes
-                        * 100
-                        / total_bytes
+                    remote_file = (
+                        remote_root
+                        + '/'
+                        + local_file.name
                     )
 
-                else:
+                temporary_file = remote_file + '.cncall.part'
 
-                    percent = 0
+                # Never overwrite a completed destination file.
+                while not self._cancel_event.is_set():
 
-                # Keep 100% reserved for successful completion.
-                # Allow the live I/O estimate to reach 100%.
-                # Successful ADB completion still emits the final
-                # authoritative 100% below.
-                percent = max(
-                    0,
-                    min(percent, 100)
-                )
-
-                if (
-                    speed > 0
-                    and total_bytes > 0
-                ):
-
-                    remaining_bytes = max(
-                        total_bytes
-                        - transferred_bytes,
-                        0
+                    exists = self._remote_file_exists(
+                        device,
+                        remote_file
                     )
 
-                    remaining = (
-                        remaining_bytes
-                        / speed
+                    if exists is True:
+                        completed_bytes += local_file.stat().st_size
+                        completed_files += 1
+                        skipped_files += 1
+                        break
+
+                    if exists is None:
+                        if not self._wait_for_device_reconnect(device):
+                            self.finished.emit(
+                                False,
+                                "تم إلغاء النسخ"
+                            )
+                            return
+                        continue
+
+                    # The destination file does not exist.
+                    # Remove any stale .part from a previous interrupted run.
+                    subprocess.run(
+                        [
+                            self.adb,
+                            '-s',
+                            device,
+                            'shell',
+                            'rm',
+                            '-f',
+                            temporary_file,
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
                     )
 
-                else:
+                    remote_parent = remote_file.rsplit('/', 1)[0]
 
-                    remaining = 0.0
+                    mkdir_result = subprocess.run(
+                        [
+                            self.adb,
+                            '-s',
+                            device,
+                            'shell',
+                            'mkdir',
+                            '-p',
+                            remote_parent,
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        encoding='utf-8',
+                        errors='ignore',
+                    )
 
-                if (
-                    percent !=
-                    progress_state["last_percent"]
-                    or speed > 0
-                ):
+                    if mkdir_result.returncode != 0:
+                        if not self._wait_for_device_reconnect(device):
+                            self.finished.emit(
+                                False,
+                                "تم إلغاء النسخ"
+                            )
+                            return
+                        continue
 
-                    progress_state[
-                        "last_percent"
-                    ] = percent
+                    command = [
+                        self.adb,
+                        '-s',
+                        device,
+                        'push',
+                        str(local_file),
+                        temporary_file,
+                    ]
 
-                    speed_text = (
-                        self._format_size(
-                            speed
+                    print(
+                        "ADB RESUMABLE FILE:",
+                        local_file,
+            "->",
+                        temporary_file,
+                    )
+
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+
+                    process = subprocess.Popen(
+                        command,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        stdin=subprocess.DEVNULL,
+                        startupinfo=startupinfo,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+
+                    with self._process_lock:
+                        self._current_process = process
+
+                    start_time = time.monotonic()
+
+                    return_code = process.wait()
+
+                    stderr_text = ''
+                    try:
+                        if process.stderr is not None:
+                            data = process.stderr.read()
+                            if data:
+                                stderr_text = data.decode(
+                                    'utf-8',
+                                    errors='ignore'
+                                ).strip()
+                    except Exception:
+                        stderr_text = ''
+
+                    with self._process_lock:
+                        if self._current_process is process:
+                            self._current_process = None
+
+                    if self._cancel_event.is_set():
+                        self.finished.emit(
+                            False,
+                            "تم إلغاء النسخ"
                         )
-                        + "/s"
-                        if speed > 0
-                        else "0 B/s"
+                        return
+
+                    if return_code != 0:
+
+                        device_connected = False
+
+                        try:
+                            state = subprocess.run(
+                                [
+                                    self.adb,
+                                    '-s',
+                                    device,
+                                    'get-state',
+                                ],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                stdin=subprocess.DEVNULL,
+                                text=True,
+                                encoding='utf-8',
+                                errors='ignore',
+                                timeout=5,
+                            )
+                            device_connected = (
+                                state.returncode == 0
+                                and state.stdout.strip().lower() == 'device'
+                            )
+                        except Exception:
+                            device_connected = False
+
+                        if not device_connected:
+                            if not self._wait_for_device_reconnect(device):
+                                self.finished.emit(
+                                    False,
+                                    "تم إلغاء النسخ"
+                                )
+                                return
+
+                            # Recheck the final destination after reconnect.
+                            final_exists = self._remote_file_exists(
+                                device,
+                                remote_file,
+                            )
+
+                            if final_exists is True:
+                                completed_bytes += local_file.stat().st_size
+                                completed_files += 1
+                                skipped_files += 1
+                                break
+
+                            self.statusChanged.emit(
+                                "تمت إعادة التوصيل — إعادة نقل الملف..."
+                            )
+                            continue
+
+                        self.finished.emit(
+                            False,
+                            (
+                                "فشل النسخ عبر ADB: "
+                                + stderr_text
+                                if stderr_text
+                                else "فشل النسخ عبر ADB"
+                            )
+                        )
+                        return
+
+                    # Push succeeded to .part.
+                    # Publish the final filename without replacing an existing file.
+                    final_exists = self._remote_file_exists(
+                        device,
+                        remote_file,
                     )
 
-                    eta_text = (
-                        self._format_time(
-                            remaining
+                    if final_exists is None:
+                        if not self._wait_for_device_reconnect(device):
+                            self.finished.emit(
+                                False,
+                                "تم إلغاء النسخ"
+                            )
+                            return
+                        continue
+
+                    if final_exists is True:
+                        subprocess.run(
+                            [
+                                self.adb,
+                                '-s',
+                                device,
+                                'shell',
+                                'rm',
+                                '-f',
+                                temporary_file,
+                            ],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL,
                         )
+                        completed_bytes += local_file.stat().st_size
+                        completed_files += 1
+                        skipped_files += 1
+                        break
+
+                    rename_result = subprocess.run(
+                        [
+                            self.adb,
+                            '-s',
+                            device,
+                            'shell',
+                            'mv',
+                            temporary_file,
+                            remote_file,
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        stdin=subprocess.DEVNULL,
+                        text=True,
+                        encoding='utf-8',
+                        errors='ignore',
+                    )
+
+                    if rename_result.returncode != 0:
+                        if not self._wait_for_device_reconnect(device):
+                            self.finished.emit(
+                                False,
+                                "تم إلغاء النسخ"
+                            )
+                            return
+
+                        final_exists = self._remote_file_exists(
+                            device,
+                            remote_file,
+                        )
+
+                        if final_exists is True:
+                            completed_bytes += local_file.stat().st_size
+                            completed_files += 1
+                            break
+
+                        continue
+
+                    completed_bytes += local_file.stat().st_size
+                    completed_files += 1
+
+                    percent = (
+                        int(completed_bytes * 100 / source_total_bytes)
+                        if source_total_bytes > 0
+                        else 100
                     )
 
                     self.progressChanged.emit(
-                        percent,
-                        speed_text,
-                        eta_text
+                        max(0, min(percent, 100)),
+                        "0 B/s",
+            "00:00"
                     )
 
-                    print(
-                        "IO PROGRESS:",
-                        f"{percent}%",
-                        "|",
-                        self._format_size(
-                            transferred_bytes
-                        ),
-                        "/",
-                        self._format_size(
-                            total_bytes
-                        ),
-                        "|",
-                        speed_text,
-                        "| ETA:",
-                        eta_text
-                    )
-
-            progress_thread = threading.Thread(
-                target=monitor_adb_io,
-                args=(
-                    process.pid,
-                    io_progress_callback,
-                    progress_stop
-                ),
-                daemon=True
-            )
-
-            progress_thread.start()
-
-            # --------------------------------------------------------
-            # WAIT FOR THE REAL ADB PROCESS
-            # --------------------------------------------------------
-
-            return_code = process.wait()
-
-            progress_stop.set()
-
-            progress_thread.join(
-                timeout=1.0
-            )
-
-            # --------------------------------------------------------
-            # Read ADB error after process termination.
-            # --------------------------------------------------------
-
-            stderr_text = ""
-
-            try:
-
-                if process.stderr is not None:
-
-                    stderr_data = (
-                        process.stderr.read()
-                    )
-
-                    if stderr_data:
-
-                        stderr_text = (
-                            stderr_data.decode(
-                                "utf-8",
-                                errors="ignore"
-                            )
-                            .strip()
-                        )
-
-            except Exception:
-                stderr_text = ""
-
-            with self._process_lock:
-                if self._current_process is process:
-                    self._current_process = None
-
-            # --------------------------------------------------------
-            # SUCCESS
-            # --------------------------------------------------------
-
-            if return_code == 0:
-
-                elapsed = max(
-                    time.monotonic()
-                    - start_time,
-                    0.001
-                )
-
-                average_speed = (
-                    total_bytes / elapsed
-                    if total_bytes > 0
-                    else 0
-                )
-
-                progress_state["bytes"] = (
-                    total_bytes
-                )
-
-                self.progressChanged.emit(
-                    100,
-                    self._format_size(
-                        average_speed
-                    ) + "/s",
-                    "00:00"
-                )
-
-                self.statusChanged.emit(
-                    "اكتمل النسخ"
-                )
-
-                print()
-                print(
-                    "========================================"
-                )
-                print(
-                    "ADB FAST TRANSFER COMPLETE"
-                )
-                print(
-                    "TOTAL:",
-                    self._format_size(
-                        total_bytes
-                    )
-                )
-                print(
-                    "TIME:",
-                    self._format_time(
-                        elapsed
-                    )
-                )
-                print(
-                    "AVERAGE SPEED:",
-                    self._format_size(
-                        average_speed
-                    ) + "/s"
-                )
-                print(
-                    "========================================"
-                )
-
-                self.finished.emit(
-                    True,
-                    "تم نسخ اللعبة بنجاح"
-                )
-
+            if self._cancel_event.is_set():
+                self.finished.emit(False, 'تم إلغاء النسخ')
                 return
 
-            # --------------------------------------------------------
-            # FAILURE
-            # --------------------------------------------------------
-
-            print(
-                "ADB EXIT CODE:",
-                return_code
+            self.progressChanged.emit(
+                100,
+                "0 B/s",
+            "00:00"
             )
 
-            if stderr_text:
-
-                print(
-                    "ADB STDERR:",
-                    stderr_text
-                )
+            self.statusChanged.emit(
+                "اكتمل النسخ بدون استبدال الملفات الموجودة"
+            )
 
             self.finished.emit(
-                False,
+                True,
                 (
-                    "فشل النسخ عبر ADB: "
-                    + stderr_text
-                    if stderr_text
-                    else "فشل النسخ عبر ADB"
+                    "تم النسخ بنجاح — "
+                    + str(skipped_files)
+                    + " ملف تم تخطيه أو كان موجودًا مسبقًا"
                 )
             )
 
+            return
         except Exception as e:
 
             with self._process_lock:
