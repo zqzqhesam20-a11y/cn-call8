@@ -146,15 +146,8 @@ jobs:
           Source: "package\KAFIA_NET_CONTROL_PRO\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
-          Name: "{autoprograms}\{#MyAppName}"
-          Filename: "{app}\..\runtime\pythonw.exe"
-          Parameters: """{app}\app_qml.py"""
-          WorkingDir: "{app}"
-
-          Name: "{autodesktop}\{#MyAppName}"
-          Filename: "{app}\..\runtime\pythonw.exe"
-          Parameters: """{app}\app_qml.py"""
-          WorkingDir: "{app}"
+          Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\..\runtime\pythonw.exe"; Parameters: """{app}\app_qml.py"""; WorkingDir: "{app}"
+          Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\..\runtime\pythonw.exe"; Parameters: """{app}\app_qml.py"""; WorkingDir: "{app}"
 
           [Run]
           Filename: "{app}\..\runtime\pythonw.exe"
