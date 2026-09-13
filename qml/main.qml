@@ -1170,7 +1170,7 @@ ApplicationWindow {
 
             ListView {
                 width: parent.width
-                Layout.fillHeight: true
+                height: parent.height - 62
                 clip: true
                 spacing: 8
                 model: window.transferDevices
@@ -1355,15 +1355,7 @@ ApplicationWindow {
 
                 delegate: CheckBox {
                     width: ListView.view.width
-                    text: modelData.model
-
-                    contentItem: Text {
-                        text: parent.text
-                        color: "#FFFFFF"
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: parent.indicator.width + parent.spacing
-                    }
-
+                    text: modelData.model + " / " + modelData.serial
                     checked: window.selectedAdbSerials.indexOf(
                                  modelData.serial
                              ) !== -1
