@@ -48,8 +48,9 @@ jobs:
           if ([regex]::IsMatch($launcher, '[^\x00-\x7F]')) {
             throw "CMD launcher must remain ASCII-only to avoid Windows codepage corruption."
           }
-          if (-not $launcher.Contains('Start-KAFIANET-CONTROL-PRO.ps1')) {
-            throw "CMD launcher does not invoke the Unicode-safe PowerShell launcher."
+          if (-not $launcher.Contains('Launch-KAFIA-NET-CONTROL-PRO.vbs') -or
+              -not $launcher.Contains('wscript.exe')) {
+            throw "CMD launcher does not start the hidden VBS launcher."
           }
           if ([regex]::IsMatch($powershellLauncher, '[^\x00-\x7F]')) {
             throw "PowerShell launcher must construct Arabic path components from Unicode code points."
