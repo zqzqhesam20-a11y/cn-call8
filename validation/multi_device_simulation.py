@@ -13,6 +13,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication
 
+from engine.adb_engine import ADBEngine
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -186,6 +188,24 @@ def test_busy_serial_and_idle_serial(controller):
     ]
     assert "SERIAL_B" in controller._active_operations
     assert any("عملية نقل قيد التنفيذ" in message for message in rejected)
+    # The controller must pass the source root, not append '/.' and accidentally
+    # let adb create a nested `saved` folder under an already-existing `Saved`.
+    assert engine_for("SERIAL_B").calls[-1][2] == str(game / "saved")
+
+
+def test_adb_source_pattern_and_progress_offset():
+    with TemporaryDirectory() as directory:
+        source = Path(directory) / "saved"
+        source.mkdir()
+        (source / "asset.pak").write_bytes(b"data")
+        assert ADBEngine._adb_source_argument(source) == str(source / "*")
+        asset = source / "asset.pak"
+        assert ADBEngine._adb_source_argument(asset) == str(asset)
+
+    assert ADBEngine._combined_progress_percent(1000, 600, 0) == 60
+    assert ADBEngine._combined_progress_percent(1000, 600, 150) == 75
+    assert ADBEngine._combined_progress_percent(1000, 1000, 0) == 99
+    assert ADBEngine._combined_progress_percent(0, 0, 0) == 0
 
 
 def test_failure_cancel_and_completion_isolation(controller):
@@ -524,6 +544,7 @@ def run_once():
     test_zero_selection(controller)
     test_independent_operations(controller)
     test_busy_serial_and_idle_serial(make_controller())
+    test_adb_source_pattern_and_progress_offset()
     test_failure_cancel_and_completion_isolation(make_controller())
     test_install_operations(make_controller())
     test_pause_resume_operations()
