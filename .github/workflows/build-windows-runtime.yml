@@ -45,6 +45,7 @@ jobs:
           Copy-Item "app_qml.py" "$stage\app_qml.py"
           Copy-Item "games.json" "$stage\games.json"
           Copy-Item "Start-KAFIANET-CONTROL-PRO.cmd" "$stage\Start-KAFIANET-CONTROL-PRO.cmd"
+          Copy-Item "Start-KAFIANET-CONTROL-PRO.ps1" "$stage\Start-KAFIANET-CONTROL-PRO.ps1"
           Copy-Item "kafianet_external_runtime.py" "$stage\kafianet_external_runtime.py"
           Copy-Item "requirements.txt" "$stage\requirements.txt"
           Copy-Item "README.md" "$stage\README.md"
