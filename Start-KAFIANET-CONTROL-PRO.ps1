@@ -70,7 +70,7 @@ if ($smokeExitCode -ne 0) {
 }
 
 # The PowerShell host itself is already hidden by the VBS launcher.
-# Do not start python.exe with -WindowStyle Hidden: that can hide the Qt
+# Do not start python.exe with a hidden show state: that can hide the Qt
 # top-level window as well. Run it in this hidden host so QApplication can
 # show the actual application window normally.
 $previousLocation = Get-Location
