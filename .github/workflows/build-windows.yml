@@ -1,10 +1,6 @@
 name: Build Windows EXE
 
 on:
-  push:
-    branches:
-      - main
-      - "fix/**"
   pull_request:
     branches:
       - main
