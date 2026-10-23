@@ -1440,7 +1440,6 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 padding: 10
                 textFormat: Text.PlainText
-                selectByMouse: true
             }
         }
     }
