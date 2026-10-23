@@ -384,6 +384,7 @@ def test_paths_and_ui():
     runtime_root = r"\\SERVER06\c$\العابي\222\66\الاخييير\py"
     assert runtime_root in launcher
     assert "PYTHON_EXE=%PYTHON_ROOT%\\python.exe" in launcher
+    assert 'PYTHONHOME=%PYTHON_ROOT%' in launcher
     assert "--qt-import-smoke-test" in launcher
     assert "from PySide6.QtWidgets import QApplication" in current
     assert "QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS" in current
