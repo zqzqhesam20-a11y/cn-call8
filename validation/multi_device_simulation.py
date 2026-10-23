@@ -49,6 +49,7 @@ class FakeOperationEngine(QObject):
         self.serial = None
         self.calls = []
         self.cancelled = False
+        self.paused = False
         FakeOperationEngine.instances.append(self)
 
     def push(self, serial, source, destination):
@@ -65,6 +66,14 @@ class FakeOperationEngine(QObject):
 
     def cancel(self):
         self.cancelled = True
+
+    def pause(self):
+        self.paused = True
+        return True
+
+    def resume(self):
+        self.paused = False
+        return True
 
     def progress(self, percent, speed="--", eta="--"):
         self.progressChanged.emit(percent, speed, eta)
@@ -227,6 +236,34 @@ def test_install_operations(controller):
     assert controller._active_operations["SERIAL_C"]["status"] == "اكتمل"
 
 
+def test_pause_resume_operations():
+    FakeOperationEngine.instances = []
+    controller = make_controller()
+    for serial in ("SERIAL_A", "SERIAL_B"):
+        controller._start_operation(
+            dict(rows([serial])[0], source="src", destination="dst")
+        )
+
+    pause_events = []
+    controller.transferPausedChanged.connect(pause_events.append)
+    controller.pauseTransfer()
+    assert controller._transfer_paused
+    assert engine_for("SERIAL_A").paused
+    assert engine_for("SERIAL_B").paused
+    assert pause_events[-1] is True
+
+    controller.resumeTransfer()
+    assert not controller._transfer_paused
+    assert not engine_for("SERIAL_A").paused
+    assert not engine_for("SERIAL_B").paused
+    assert pause_events[-1] is False
+
+    controller.cancelDevice("SERIAL_A")
+    controller.cancelDevice("SERIAL_B")
+    engine_for("SERIAL_A").finish(False, "cancelled")
+    engine_for("SERIAL_B").finish(False, "cancelled")
+
+
 def test_duplicate_completion(controller):
     operation = dict(rows(["SERIAL_A"])[0], source="src", destination="dst")
     controller._start_operation(operation)
@@ -348,6 +385,10 @@ def test_paths_and_ui():
     qml = Path("qml/main.qml").read_text()
     assert "model: window.transferDevices" in qml
     assert "onClicked: appController.cancelDevice" in qml
+    assert '"إيقاف مؤقت"' in qml
+    assert '"استئناف"' in qml
+    assert "appController.pauseTransfer()" in qml
+    assert "appController.resumeTransfer()" in qml
     assert "TransferWindow()" not in current
 
     # Regression checks for the repaired lifecycle and physical source paths.
@@ -361,6 +402,13 @@ def test_paths_and_ui():
     launch = launch[:launch.index("package_id = ADB_PACKAGE_IDS.get(")]
     assert "self.adb_engine.get_devices()" not in launch
     assert "يرجى تحديد هاتف واحد على الأقل قبل تشغيل اللعبة." in launch
+
+    # Disconnected phones wait for reconnection and retry only unsynced files.
+    assert "def _device_is_connected(self, device):" in engine_source
+    assert "self._wait_for_device_reconnect(device)" in engine_source
+    assert "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..." in engine_source
+    assert '"--sync"' in engine_source
+    assert "تمت إعادة توصيل الهاتف" in engine_source
 
     # Protect against ADB stderr pipe deadlocks and false 100% completion.
     wait_start = engine_source.index("def _push_thread")
@@ -384,6 +432,10 @@ def test_paths_and_ui():
     assert all(ord(char) < 128 for char in launcher)
     assert "Start-KAFIANET-CONTROL-PRO.ps1" in launcher
     assert "powershell.exe" in launcher
+    hidden_launcher = Path("Launch-KAFIA-NET-CONTROL-PRO.vbs").read_text(encoding="utf-8")
+    assert all(ord(char) < 128 for char in hidden_launcher)
+    assert "Start-KAFIANET-CONTROL-PRO.ps1" in hidden_launcher
+    assert "shell.Run(command, 0, True)" in hidden_launcher
 
     external_launcher = Path("Start-KAFIANET-CONTROL-PRO.ps1").read_text(
         encoding="utf-8"
@@ -396,7 +448,9 @@ def test_paths_and_ui():
     assert "PYTHONPATH" in external_launcher
     assert "--qt-import-smoke-test" in external_launcher
     assert "kafianet_external_runtime.py" in external_launcher
-    assert "Read-Host" in external_launcher
+    assert "Start-Process" in external_launcher
+    assert "-WindowStyle Hidden" in external_launcher
+    assert "WScript.Shell" in external_launcher
     assert "Invoke-WebRequest" not in external_launcher
     assert "pip install" not in external_launcher
     assert "vc_redist" not in external_launcher
@@ -432,6 +486,7 @@ def run_once():
     test_busy_serial_and_idle_serial(make_controller())
     test_failure_cancel_and_completion_isolation(make_controller())
     test_install_operations(make_controller())
+    test_pause_resume_operations()
     test_duplicate_completion(make_controller())
     test_process_ownership()
     test_paths_and_ui()
