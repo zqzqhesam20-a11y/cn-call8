@@ -737,8 +737,10 @@ class ADBEngine(QObject):
                 if stream is None:
                     return
                 try:
+                    # BufferedReader.read1() returns currently available
+                    # pipe data instead of waiting to fill the full request.
                     while True:
-                        chunk = stream.read(4096)
+                        chunk = stream.read1(4096)
                         if not chunk:
                             break
                         chunks.append(chunk)
