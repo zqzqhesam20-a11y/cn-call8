@@ -12,7 +12,7 @@
 
 1. تأكّد من أن SERVER06 متصل وأن حساب Windows يستطيع الوصول إلى مشاركة C$.
 2. تأكّد أن بيئة Python الخارجية تحتوي على Lib وDLLs وPySide6 بإصدار 6.10.1 أو أحدث، إضافة إلى psutil؛ هذا الإصدار الأدنى مطلوب لدعم Python 3.14.
-3. شغّل Start-KAFIANET-CONTROL-PRO.cmd، أو استخدم اختصار التطبيق الذي ينشئه المثبّت. يستدعي الملف kafianet_external_runtime.py الذي يضيف مجلدات DLL الخاصة بـ Python وPySide6 ويحدّد مسارات إضافات Qt/QML قبل تحميل QtWidgets.
+3. شغّل Start-KAFIANET-CONTROL-PRO.cmd، أو استخدم اختصار التطبيق الذي ينشئه المثبّت. ملف CMD مقصود أن يبقى ASCII فقط؛ وهو يشغّل Start-KAFIANET-CONTROL-PRO.ps1 الذي يبني أسماء المجلدات العربية بنقاط Unicode، لتجنب تلف مسار UNC بسبب ترميز CMD. بعد ذلك يستدعي kafianet_external_runtime.py لتهيئة DLL وQt/QML.
 4. يقوم ملف التشغيل بفحص مسار Python واستيراد PySide6.QtWidgets وإنشاء QApplication اختباريًا قبل فتح الواجهة. إذا فشل الاختبار، يعرض الخطأ ويوقف التشغيل دون تنزيل runtime أو تثبيته.
 
 لا تشغّل app_qml.py مباشرةً إذا أردت استخدام المفسّر المشترك؛ شغّل ملف CMD لكي يستخدم المسار المحدد أعلاه ويهيّئ مسارات DLL وQt.
