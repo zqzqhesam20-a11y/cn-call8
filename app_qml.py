@@ -3,6 +3,15 @@ import os
 import threading
 from pathlib import Path
 
+# Keep Arabic diagnostics from crashing when launched with a legacy Windows
+# console code page. Packaged GUI builds may have no console streams at all.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
 
 from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
