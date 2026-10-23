@@ -44,6 +44,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           $launcher = Get-Content "Start-KAFIANET-CONTROL-PRO.cmd" -Raw
           $powershellLauncher = Get-Content "Start-KAFIANET-CONTROL-PRO.ps1" -Raw
+          $hiddenLauncher = Get-Content "Launch-KAFIA-NET-CONTROL-PRO.vbs" -Raw
           if ([regex]::IsMatch($launcher, '[^\x00-\x7F]')) {
             throw "CMD launcher must remain ASCII-only to avoid Windows codepage corruption."
           }
@@ -52,6 +53,18 @@ jobs:
           }
           if ([regex]::IsMatch($powershellLauncher, '[^\x00-\x7F]')) {
             throw "PowerShell launcher must construct Arabic path components from Unicode code points."
+          }
+          if ([regex]::IsMatch($hiddenLauncher, '[^\x00-\x7F]')) {
+            throw "The hidden launcher must remain ASCII-only."
+          }
+          if (-not $hiddenLauncher.Contains('Start-KAFIANET-CONTROL-PRO.ps1') -or
+              -not $hiddenLauncher.Contains('shell.Run(command, 0, True)')) {
+            throw "The VBS launcher must run PowerShell invisibly and wait for the GUI app."
+          }
+          if (-not $powershellLauncher.Contains('Start-Process') -or
+              -not $powershellLauncher.Contains('-WindowStyle Hidden') -or
+              -not $powershellLauncher.Contains('WScript.Shell')) {
+            throw "The external Python app must launch without a console window and report errors in a dialog."
           }
           if (-not $powershellLauncher.Contains('SERVER06\c$') -or
               -not $powershellLauncher.Contains('0x0639') -or
@@ -85,6 +98,7 @@ jobs:
           Copy-Item "games.json" "$stage\games.json"
           Copy-Item "Start-KAFIANET-CONTROL-PRO.cmd" "$stage\Start-KAFIANET-CONTROL-PRO.cmd"
           Copy-Item "Start-KAFIANET-CONTROL-PRO.ps1" "$stage\Start-KAFIANET-CONTROL-PRO.ps1"
+          Copy-Item "Launch-KAFIA-NET-CONTROL-PRO.vbs" "$stage\Launch-KAFIA-NET-CONTROL-PRO.vbs"
           Copy-Item "kafianet_external_runtime.py" "$stage\kafianet_external_runtime.py"
           Copy-Item "requirements.txt" "$stage\requirements.txt"
           Copy-Item "README.md" "$stage\README.md"
@@ -150,11 +164,11 @@ jobs:
           Source: "source-package\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
           [Icons]
-          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\Start-KAFIANET-CONTROL-PRO.cmd"; WorkingDir: "{app}"
-          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\Start-KAFIANET-CONTROL-PRO.cmd"; WorkingDir: "{app}"
+          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\Launch-KAFIA-NET-CONTROL-PRO.vbs"""; WorkingDir: "{app}"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\Launch-KAFIA-NET-CONTROL-PRO.vbs"""; WorkingDir: "{app}"
 
           [Run]
-          Filename: "{app}\Start-KAFIANET-CONTROL-PRO.cmd"; WorkingDir: "{app}"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+          Filename: "{sys}\wscript.exe"; Parameters: """{app}\Launch-KAFIA-NET-CONTROL-PRO.vbs"""; WorkingDir: "{app}"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
           '@ | Set-Content -Path installer.iss -Encoding UTF8
 
       - name: Build and verify installer
