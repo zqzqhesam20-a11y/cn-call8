@@ -264,6 +264,43 @@ def test_pause_resume_operations():
     engine_for("SERIAL_B").finish(False, "cancelled")
 
 
+def test_oem_permission_guidance():
+    controller = make_controller()
+    serial = "XIAOMI_SERIAL"
+    controller._device_info[serial] = {
+        "manufacturer": "Xiaomi",
+        "model": "Redmi Note"
+    }
+    operation = {
+        "serial": serial,
+        "kind": "copy",
+        "destination": "/sdcard/Android/data/com.test.game/",
+        "status": "فشل",
+        "percent": 0,
+        "operation": "فشل النسخ",
+        "speed": "--",
+        "eta": "--",
+        "error": "Permission denied",
+        "raw_error": "remote secure_mkdirs failed: Permission denied",
+        "completed": True,
+        "cancelled": False,
+    }
+    controller._active_operations[serial] = operation
+
+    summary = controller._device_copy_failure_summary(
+        serial, operation, operation["raw_error"]
+    )
+    assert "Android/data" in summary
+    assert "إرشادات الإصلاح" in summary
+
+    help_text = controller.deviceCopyHelp(serial)
+    assert "Xiaomi Redmi Note" in help_text
+    assert "USB debugging (Security settings)" in help_text
+    assert "Install via USB" in help_text
+    assert "remote secure_mkdirs failed: Permission denied" in help_text
+    assert "لا يحاول التطبيق تعطيل حماية النظام" in help_text
+
+
 def test_duplicate_completion(controller):
     operation = dict(rows(["SERIAL_A"])[0], source="src", destination="dst")
     controller._start_operation(operation)
@@ -389,6 +426,9 @@ def test_paths_and_ui():
     assert '"استئناف"' in qml
     assert "appController.pauseTransfer()" in qml
     assert "appController.resumeTransfer()" in qml
+    assert "إرشادات الإصلاح" in qml
+    assert "deviceCopyHelpDialog.open()" in qml
+    assert "deviceCopyHelpText" in qml
     assert "TransferWindow()" not in current
 
     # Regression checks for the repaired lifecycle and physical source paths.
@@ -487,6 +527,7 @@ def run_once():
     test_failure_cancel_and_completion_isolation(make_controller())
     test_install_operations(make_controller())
     test_pause_resume_operations()
+    test_oem_permission_guidance()
     test_duplicate_completion(make_controller())
     test_process_ownership()
     test_paths_and_ui()
