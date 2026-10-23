@@ -22,7 +22,10 @@ from PySide6.QtQml import QQmlApplicationEngine
 # Qt's platform plugins are loaded when QApplication is constructed.
 # Build verification invokes this mode against the frozen executable.
 if "--qt-import-smoke-test" in sys.argv:
-    QApplication([])
+    print("PYTHON_RUNTIME:", sys.executable)
+    print("PYSIDE6_VERSION:", getattr(__import__("PySide6"), "__version__", "unknown"))
+    app = QApplication([])
+    print("QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS")
     sys.exit(0)
 
 from engine.transfer_engine import TransferEngine
