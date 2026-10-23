@@ -193,7 +193,7 @@ def test_busy_serial_and_idle_serial(controller):
     assert engine_for("SERIAL_B").calls[-1][2] == str(game / "saved")
 
 
-def test_adb_source_pattern_and_progress_offset():
+def test_adb_source_arguments_and_progress_offset():
     with TemporaryDirectory() as directory:
         source = Path(directory) / "saved"
         source.mkdir()
@@ -549,7 +549,7 @@ def run_once():
     test_zero_selection(controller)
     test_independent_operations(controller)
     test_busy_serial_and_idle_serial(make_controller())
-    test_adb_source_pattern_and_progress_offset()
+    test_adb_source_arguments_and_progress_offset()
     test_failure_cancel_and_completion_isolation(make_controller())
     test_install_operations(make_controller())
     test_pause_resume_operations()
