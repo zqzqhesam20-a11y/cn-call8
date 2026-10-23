@@ -49,6 +49,9 @@ jobs:
           if (-not $launcher.Contains('PYTHON_EXE=%PYTHON_ROOT%\python.exe')) {
             throw "Launcher does not select python.exe from the external runtime folder."
           }
+          if (-not $launcher.Contains('PYTHONHOME=%PYTHON_ROOT%')) {
+            throw "Launcher does not set PYTHONHOME to the external runtime folder."
+          }
           if (-not $launcher.Contains('--qt-import-smoke-test')) {
             throw "Launcher is missing the Qt startup preflight."
           }
