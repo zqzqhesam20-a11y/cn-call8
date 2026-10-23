@@ -44,6 +44,18 @@ jobs:
             throw "The packaged application executable was not produced."
           }
 
+      - name: Smoke-test packaged Qt startup
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "dist\KAFIA_NET_CONTROL_PRO\KAFIA_NET_CONTROL_PRO.exe" --qt-import-smoke-test
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged QtWidgets/QApplication smoke test failed with exit code $LASTEXITCODE."
+          }
+
       - name: Install Inno Setup
         shell: pwsh
         run: |
