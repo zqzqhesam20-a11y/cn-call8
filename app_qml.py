@@ -423,7 +423,7 @@ class AppController(QObject):
 
     def _device_copy_failure_summary(self, serial, operation, raw_message):
         """Map common OEM/Android storage denials to a useful short message."""
-        if success_or_not := bool(operation.get("kind") != "copy"):
+        if operation.get("kind") != "copy":
             return raw_message
 
         text = str(raw_message or "")
@@ -435,7 +435,6 @@ class AppController(QObject):
             "operation not permitted",
             "eacces",
             "errno 13",
-            "failed to copy",
         )
         if not any(marker in lowered for marker in permission_markers):
             return raw_message
@@ -507,7 +506,7 @@ class AppController(QObject):
                 raw_error,
             ])
 
-        return "\\n".join(lines)
+        return "\n".join(lines)
 
     def _finished_for_device(self, serial, success, message):
         print(
