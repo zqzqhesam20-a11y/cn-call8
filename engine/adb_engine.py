@@ -118,20 +118,18 @@ class ADBEngine(QObject):
         self._cancelled_by_user = False
 
     def _get_adb_path(self):
-        # Prefer the shared fixed ADB installation used by all
-        # KAFIA NET CONTROL PRO updates.
+        # Prefer the ADB binary bundled with this application. This keeps
+        # packaged builds independent of a machine-specific D:\games path.
+        local_adb = BASE_DIR / "platform-tools" / "adb.exe"
+        if local_adb.is_file():
+            return str(local_adb)
+
+        # Development fallback for the shared workstation installation.
         external_adb = Path(
             r"D:\games\programe files\platform-tools\adb.exe"
         )
-
         if external_adb.is_file():
             return str(external_adb)
-
-        # Development/local fallback.
-        local_adb = BASE_DIR / "platform-tools" / "adb.exe"
-
-        if local_adb.is_file():
-            return str(local_adb)
 
         # Final fallback: allow adb.exe from PATH.
         return "adb"
@@ -205,75 +203,42 @@ class ADBEngine(QObject):
 
     @Slot(result=list)
     def get_devices(self):
-
-        result = self._run(
-            ["devices"]
-        )
+        try:
+            result = self._run(["devices"], timeout=10)
+        except Exception as exc:
+            print("ADB DEVICE LIST FAILED:", exc)
+            self.devicesChanged.emit([])
+            return []
 
         devices = []
-
         for line in result.stdout.splitlines():
-
             line = line.strip()
-
             if not line or line.startswith("List of devices"):
                 continue
 
             parts = line.split()
-
-            if len(parts) < 2:
+            if len(parts) < 2 or parts[1] != "device":
                 continue
 
             serial = parts[0]
-            state = parts[1]
 
-            if state != "device":
-                continue
+            def read_device_property(args):
+                try:
+                    property_result = self._run(args, timeout=3)
+                    return property_result.stdout.strip()
+                except Exception as exc:
+                    print("ADB DEVICE PROPERTY WARNING:", serial, exc)
+                    return ""
 
-            model_result = self._run(
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "getprop",
-                    "ro.product.model"
-                ]
-            )
-
-            manufacturer_result = self._run(
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "getprop",
-                    "ro.product.manufacturer"
-                ]
-            )
-
-            model = model_result.stdout.strip()
-            manufacturer = manufacturer_result.stdout.strip()
-
-            if not model:
-                model = "Android"
-
-            if not manufacturer:
-                manufacturer = "Android"
-
-            # Prefer the user-assigned Android device name.
-            # Fall back to manufacturer + model when unavailable.
-            device_name_result = self._run(
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "settings",
-                    "get",
-                    "global",
-                    "device_name"
-                ]
-            )
-
-            device_name = device_name_result.stdout.strip()
+            model = read_device_property([
+                "-s", serial, "shell", "getprop", "ro.product.model"
+            ]) or "Android"
+            manufacturer = read_device_property([
+                "-s", serial, "shell", "getprop", "ro.product.manufacturer"
+            ]) or "Android"
+            device_name = read_device_property([
+                "-s", serial, "shell", "settings", "get", "global", "device_name"
+            ])
 
             if not device_name or device_name.lower() in {"null", "unknown"}:
                 device_name = f"{manufacturer} {model}".strip()
@@ -286,7 +251,6 @@ class ADBEngine(QObject):
             })
 
         self.devicesChanged.emit(devices)
-
         return devices
 
     def _format_size(self, size):
@@ -579,7 +543,8 @@ class ADBEngine(QObject):
             check_path = destination.rstrip('/.') or destination
             check_file = (
                 check_path.rstrip('/')
-                + '/.cncall_write_test'
+                + f'/.cncall_write_test_{os.getpid()}_'
+                f'{threading.get_ident()}_{time.time_ns()}'
             )
 
             print(
@@ -604,6 +569,7 @@ class ADBEngine(QObject):
                 encoding="utf-8",
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
             )
 
             if mkdir_result.returncode != 0:
@@ -646,6 +612,7 @@ class ADBEngine(QObject):
                 encoding="utf-8",
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
             )
 
             if write_result.returncode != 0:
@@ -689,6 +656,7 @@ class ADBEngine(QObject):
                 encoding="utf-8",
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
             )
 
             if cleanup_result.returncode != 0:
@@ -760,6 +728,30 @@ class ADBEngine(QObject):
                     subprocess.CREATE_NO_WINDOW
                 )
             )
+
+            # Drain stderr while ADB is running. Waiting for the process before
+            # reading a PIPE can deadlock if the child fills the OS pipe buffer.
+            stderr_chunks = []
+
+            def drain_stderr(stream, chunks):
+                if stream is None:
+                    return
+                try:
+                    while True:
+                        chunk = stream.read(4096)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                except Exception as exc:
+                    print("ADB STDERR DRAIN WARNING:", exc)
+
+            stderr_reader = threading.Thread(
+                target=drain_stderr,
+                args=(process.stderr, stderr_chunks),
+                name=f"ADB-stderr-{device}",
+                daemon=True
+            )
+            stderr_reader.start()
 
             with self._process_lock:
                 self._current_process = process
@@ -848,13 +840,10 @@ class ADBEngine(QObject):
 
                     percent = 0
 
-                # Keep 100% reserved for successful completion.
-                # Allow the live I/O estimate to reach 100%.
-                # Successful ADB completion still emits the final
-                # authoritative 100% below.
+                # Keep 100% reserved for successful ADB completion.
                 percent = max(
                     0,
-                    min(percent, 100)
+                    min(percent, 99)
                 )
 
                 if (
@@ -948,33 +937,14 @@ class ADBEngine(QObject):
             progress_thread.join(
                 timeout=1.0
             )
+            stderr_reader.join(timeout=2.0)
 
-            # --------------------------------------------------------
-            # Read ADB error after process termination.
-            # --------------------------------------------------------
-
-            stderr_text = ""
-
-            try:
-
-                if process.stderr is not None:
-
-                    stderr_data = (
-                        process.stderr.read()
-                    )
-
-                    if stderr_data:
-
-                        stderr_text = (
-                            stderr_data.decode(
-                                "utf-8",
-                                errors="ignore"
-                            )
-                            .strip()
-                        )
-
-            except Exception:
-                stderr_text = ""
+            # The reader has drained the pipe during execution; joining it
+            # after process exit collects the complete available error text.
+            stderr_text = b"".join(stderr_chunks).decode(
+                "utf-8",
+                errors="ignore"
+            ).strip()
 
             with self._process_lock:
                 if self._current_process is process:
