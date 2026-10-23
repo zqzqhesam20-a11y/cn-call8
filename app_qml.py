@@ -94,6 +94,7 @@ class AppController(QObject):
     transferEtaChanged = Signal(str)
     transferFinished = Signal(bool, str)
     operationStateChanged = Signal(str)
+    transferPausedChanged = Signal(bool)
     operationRejected = Signal(str)
     transferBatchChanged = Signal(list)
     deviceProgressChanged = Signal(str, int, str, str, str, str, str)
@@ -161,6 +162,7 @@ class AppController(QObject):
         self._active_operations = {}
         self._operation_state = "IDLE"
         self._operation_busy = False
+        self._transfer_paused = False
         self._device_info = {}
 
         self.current_source = "WIRELESS"
@@ -280,6 +282,10 @@ class AppController(QObject):
             self._operation_busy = busy
             self.busyChanged.emit(busy)
 
+        if not busy and self._transfer_paused:
+            self._transfer_paused = False
+            self.transferPausedChanged.emit(False)
+
         self.operationStateChanged.emit(state)
 
     def _reject_operation(self, message):
@@ -350,6 +356,14 @@ class AppController(QObject):
         )
         self._set_operation_state("ACTIVE" if active else "IDLE")
 
+    def _operation_status_changed(self, serial, message):
+        self._update_operation(
+            serial,
+            status=message,
+            operation_text=message
+        )
+        self.messageChanged.emit(message)
+
     def _start_operation(self, operation):
         serial = operation["serial"]
         engine = ADBEngine()
@@ -367,11 +381,7 @@ class AppController(QObject):
         )
         engine.statusChanged.connect(
             lambda message, s=serial:
-            self._update_operation(
-                s,
-                status=message,
-                operation_text=message
-            )
+            self._operation_status_changed(s, message)
         )
         engine.finished.connect(
             lambda success, message, s=serial:
@@ -1084,12 +1094,9 @@ class AppController(QObject):
 
     @Slot()
     def pauseTransfer(self):
-        active = list(self._active_operations.items())
+        paused_any = False
 
-        if not active:
-            return
-
-        for serial, operation in active:
+        for serial, operation in list(self._active_operations.items()):
             if operation.get("completed", False):
                 continue
 
@@ -1098,18 +1105,24 @@ class AppController(QObject):
                 continue
 
             try:
-                engine.pause()
+                paused_any = bool(engine.pause()) or paused_any
             except Exception as e:
                 print("PAUSE ERROR:", serial, e)
 
+        if paused_any != self._transfer_paused:
+            self._transfer_paused = paused_any
+            self.transferPausedChanged.emit(paused_any)
+
+        if not paused_any:
+            self.messageChanged.emit(
+                "لا توجد عملية نقل نشطة يمكن إيقافها مؤقتًا الآن."
+            )
+
     @Slot()
     def resumeTransfer(self):
-        active = list(self._active_operations.items())
+        resumed_any = False
 
-        if not active:
-            return
-
-        for serial, operation in active:
+        for serial, operation in list(self._active_operations.items()):
             if operation.get("completed", False):
                 continue
 
@@ -1118,9 +1131,18 @@ class AppController(QObject):
                 continue
 
             try:
-                engine.resume()
+                resumed_any = bool(engine.resume()) or resumed_any
             except Exception as e:
                 print("RESUME ERROR:", serial, e)
+
+        if resumed_any and self._transfer_paused:
+            self._transfer_paused = False
+            self.transferPausedChanged.emit(False)
+
+        if not resumed_any:
+            self.messageChanged.emit(
+                "لا توجد عملية نقل متوقفة مؤقتًا لاستئنافها."
+            )
 
     @Slot()
     def cancelTransfer(self):
