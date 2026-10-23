@@ -525,6 +525,7 @@ class ADBEngine(QObject):
     ):
 
         process = None
+        requested_source = str(source)
         requested_destination = destination
 
         try:
@@ -706,7 +707,7 @@ class ADBEngine(QObject):
                 device,
                 "push",
                 "--sync",
-                str(source_path),
+                requested_source,
                 destination
             ]
 
@@ -1106,7 +1107,7 @@ class ADBEngine(QObject):
                     self._pause_event.set()
                     retry_thread = threading.Thread(
                         target=self._push_thread,
-                        args=(device, str(source_path), requested_destination),
+                        args=(device, requested_source, requested_destination),
                         name=f"ADB-push-resume-{device}",
                         daemon=True
                     )
