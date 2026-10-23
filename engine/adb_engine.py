@@ -1425,7 +1425,8 @@ class ADBEngine(QObject):
 
     def _resume_current_process(self):
 
-        process = self._current_process
+        with self._process_lock:
+            process = self._current_process
 
         if process is None:
             return False
@@ -1493,21 +1494,22 @@ class ADBEngine(QObject):
 
         return False
 
-    @Slot()
+    @Slot(result=bool)
     def pause(self):
 
         if self._process_paused:
-            return
+            return True
 
-        process = self._current_process
+        with self._process_lock:
+            process = self._current_process
 
         if process is None or process.poll() is not None:
 
             self.statusChanged.emit(
-                "لا توجد عملية نقل جارية"
+                "لا توجد عملية نقل يمكن إيقافها مؤقتًا الآن"
             )
 
-            return
+            return False
 
         if self._suspend_current_process():
 
@@ -1516,14 +1518,16 @@ class ADBEngine(QObject):
             self.statusChanged.emit(
                 "تم إيقاف النقل مؤقتًا"
             )
+            return True
 
         else:
 
             self.statusChanged.emit(
                 "تعذر إيقاف النقل مؤقتًا"
             )
+            return False
 
-    @Slot()
+    @Slot(result=bool)
     def resume(self):
 
         process = self._current_process
@@ -1536,7 +1540,7 @@ class ADBEngine(QObject):
                 "لا توجد عملية نقل جارية"
             )
 
-            return
+            return False
 
         if self._process_paused:
 
@@ -1547,12 +1551,14 @@ class ADBEngine(QObject):
                 self.statusChanged.emit(
                     "تم استئناف النقل..."
                 )
+                return True
 
             else:
 
                 self.statusChanged.emit(
                     "تعذر استئناف النقل"
                 )
+                return False
 
         else:
 
@@ -1561,6 +1567,7 @@ class ADBEngine(QObject):
             self.statusChanged.emit(
                 "تم استئناف النقل..."
             )
+            return True
 
     @Slot()
     def cancel(self):
