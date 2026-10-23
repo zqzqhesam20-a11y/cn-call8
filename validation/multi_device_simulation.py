@@ -467,7 +467,13 @@ def test_paths_and_ui():
         engine_source[install_start:install_end]
     )
     qml = Path("qml/main.qml").read_text()
-    assert "model: window.transferDevices" in qml
+    # Frequent transferBatchChanged signals must patch stable rows in place;
+    # replacing a JavaScript-array ListView model resets contentY and scroll.
+    assert "model: transferDevicesModel" in qml
+    assert "function syncTransferDeviceModel(devices)" in qml
+    assert "transferDevicesModel.setProperty(" in qml
+    assert "transferDevicesModel.clear()" not in qml
+    assert "model: window.transferDevices" not in qml
     assert "onClicked: appController.cancelDevice" in qml
     assert '"إيقاف مؤقت"' in qml
     assert '"استئناف"' in qml
