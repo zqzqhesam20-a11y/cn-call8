@@ -326,7 +326,11 @@ def test_process_ownership():
 
 def test_paths_and_ui():
     current = Path("app_qml.py").read_text(encoding="utf-8")
-    head = subprocess.check_output(["git", "show", "HEAD:app_qml.py"], text=True)
+    head = subprocess.check_output(
+        ["git", "show", "HEAD:app_qml.py"],
+        encoding="utf-8",
+        errors="strict"
+    )
     for start, end in (
         ('        elif game_name == "PUBG Mobile":',
          '        elif game_name == "Call of Duty Mobile":'),
