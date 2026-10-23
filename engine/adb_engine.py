@@ -519,17 +519,39 @@ class ADBEngine(QObject):
             return None
 
     @staticmethod
-    def _adb_source_arguments(source_path):
-        """Return directory children as explicit ADB sources (no root nesting)."""
+    def _adb_source_plan(source_path, destination):
+        """Choose source args/ADB target without nesting a source root.
+
+        When the local directory basename matches the remote directory name,
+        pass the directory itself to its remote parent. This keeps very large
+        folders to one source argument, including Windows case-only aliases
+        such as local "saved" and remote "Saved". Otherwise pass each direct
+        child into the exact destination root.
+        """
+        remote_destination = destination.rstrip("/")
+        remote_leaf = remote_destination.rsplit("/", 1)[-1]
+        remote_parent = remote_destination.rsplit("/", 1)[0] or "/"
+
+        if (
+            source_path.is_dir()
+            and source_path.name.casefold() == remote_leaf.casefold()
+        ):
+            source_alias = source_path.with_name(remote_leaf)
+            if source_alias.exists():
+                return [str(source_alias)], remote_parent
+
         if source_path.is_dir():
-            return [
-                str(path)
-                for path in sorted(
-                    source_path.iterdir(),
-                    key=lambda item: item.name.casefold()
-                )
-            ]
-        return [str(source_path)]
+            return (
+                [
+                    str(path)
+                    for path in sorted(
+                        source_path.iterdir(),
+                        key=lambda item: item.name.casefold()
+                    )
+                ],
+                remote_destination
+            )
+        return [str(source_path)], remote_destination
 
     @staticmethod
     def _combined_progress_percent(total_bytes, offset_bytes, attempt_bytes):
@@ -723,13 +745,17 @@ class ADBEngine(QObject):
                 self.finished.emit(True, "المصدر فارغ؛ تم تجهيز مجلد الوجهة")
                 return
 
-            adb_sources = self._adb_source_arguments(source_path)
+            adb_sources, adb_destination = self._adb_source_plan(
+                source_path,
+                destination
+            )
             if not adb_sources:
                 self.progressChanged.emit(100, "0 B/s", "00:00")
                 self.statusChanged.emit("اكتمل النسخ")
                 self.finished.emit(True, "المصدر فارغ؛ تم تجهيز مجلد الوجهة")
                 return
             print("ADB SOURCE ARGUMENT COUNT:", len(adb_sources))
+            print("ADB DESTINATION ARGUMENT:", adb_destination)
 
             print()
             print("========================================")
@@ -749,7 +775,7 @@ class ADBEngine(QObject):
                 "push",
                 "--sync",
                 *adb_sources,
-                destination
+                adb_destination
             ]
 
             print(
