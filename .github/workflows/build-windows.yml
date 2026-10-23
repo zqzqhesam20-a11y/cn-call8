@@ -43,11 +43,14 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $launcher = Get-Content "Start-KAFIANET-CONTROL-PRO.cmd" -Raw
-          if ($launcher -notmatch '\\\\SERVER06\\c\$\\العابي\\222\\66\\الاخييير\\py\\python\.exe') {
+          if (-not $launcher.Contains('SERVER06\c$\العابي\222\66\الاخييير\py')) {
             throw "Launcher does not point to the approved external Python runtime."
           }
-          if ($launcher -notmatch 'from PySide6\.QtWidgets import QApplication') {
-            throw "Launcher is missing the QtWidgets preflight check."
+          if (-not $launcher.Contains('PYTHON_EXE=%PYTHON_ROOT%\python.exe')) {
+            throw "Launcher does not select python.exe from the external runtime folder."
+          }
+          if (-not $launcher.Contains('--qt-import-smoke-test')) {
+            throw "Launcher is missing the Qt startup preflight."
           }
           if ($launcher -match 'Invoke-WebRequest|pip install|vc_redist') {
             throw "The launcher must not download or install runtime components."
