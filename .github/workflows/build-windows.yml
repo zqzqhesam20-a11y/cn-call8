@@ -43,20 +43,25 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $launcher = Get-Content "Start-KAFIANET-CONTROL-PRO.cmd" -Raw
-          if (-not $launcher.Contains('SERVER06\c$\العابي\222\66\الاخييير\py')) {
-            throw "Launcher does not point to the approved external Python runtime."
+          $powershellLauncher = Get-Content "Start-KAFIANET-CONTROL-PRO.ps1" -Raw
+          if ([regex]::IsMatch($launcher, '[^\x00-\x7F]')) {
+            throw "CMD launcher must remain ASCII-only to avoid Windows codepage corruption."
           }
-          if (-not $launcher.Contains('PYTHON_EXE=%PYTHON_ROOT%\python.exe')) {
-            throw "Launcher does not select python.exe from the external runtime folder."
+          if (-not $launcher.Contains('Start-KAFIANET-CONTROL-PRO.ps1')) {
+            throw "CMD launcher does not invoke the Unicode-safe PowerShell launcher."
           }
-          if (-not $launcher.Contains('PYTHONHOME=%PYTHON_ROOT%')) {
-            throw "Launcher does not set PYTHONHOME to the external runtime folder."
+          if ([regex]::IsMatch($powershellLauncher, '[^\x00-\x7F]')) {
+            throw "PowerShell launcher must construct Arabic path components from Unicode code points."
           }
-          if (-not $launcher.Contains('--qt-import-smoke-test')) {
-            throw "Launcher is missing the Qt startup preflight."
+          if (-not $powershellLauncher.Contains('SERVER06\c$') -or
+              -not $powershellLauncher.Contains('0x0639') -or
+              -not $powershellLauncher.Contains('0x062E')) {
+            throw "PowerShell launcher is missing the approved SERVER06 path or Unicode folder components."
           }
-          if (-not $launcher.Contains('kafianet_external_runtime.py')) {
-            throw "Launcher does not use the external-runtime DLL bootstrap."
+          foreach ($required in @('PYTHONHOME', 'PYTHONPATH', '--qt-import-smoke-test', 'kafianet_external_runtime.py')) {
+            if (-not $powershellLauncher.Contains($required)) {
+              throw "PowerShell launcher is missing required setting or preflight: $required"
+            }
           }
           $bootstrap = Get-Content "kafianet_external_runtime.py" -Raw
           if (-not $bootstrap.Contains('os.add_dll_directory')) {
@@ -65,7 +70,7 @@ jobs:
           if (-not $bootstrap.Contains('SERVER06\c$\العابي\222\66\الاخييير\py')) {
             throw "External-runtime bootstrap has a different runtime path."
           }
-          if ($launcher -match 'Invoke-WebRequest|pip install|vc_redist') {
+          if ($powershellLauncher -match 'Invoke-WebRequest|pip install|vc_redist') {
             throw "The launcher must not download or install runtime components."
           }
 
@@ -79,6 +84,7 @@ jobs:
           Copy-Item "app_qml.py" "$stage\app_qml.py"
           Copy-Item "games.json" "$stage\games.json"
           Copy-Item "Start-KAFIANET-CONTROL-PRO.cmd" "$stage\Start-KAFIANET-CONTROL-PRO.cmd"
+          Copy-Item "Start-KAFIANET-CONTROL-PRO.ps1" "$stage\Start-KAFIANET-CONTROL-PRO.ps1"
           Copy-Item "kafianet_external_runtime.py" "$stage\kafianet_external_runtime.py"
           Copy-Item "requirements.txt" "$stage\requirements.txt"
           Copy-Item "README.md" "$stage\README.md"
