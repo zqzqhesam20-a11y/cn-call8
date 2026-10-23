@@ -45,8 +45,10 @@ if defined KAFIANET_OLD_QT_QPA_PLATFORM (
 if not "%QT_SMOKE_EXIT%"=="0" (
     echo.
     echo [KAFIA NET CONTROL PRO] Qt startup failed using the external Python runtime.
-    echo Check the PySide6 version, Qt DLLs, platform plugins, and psutil in:
+    echo Python 3.14 requires PySide6 6.10.1 or newer, plus compatible Qt DLLs and plugins.
+    echo Check PySide6 and psutil in:
     echo %PYTHON_ROOT%
+    echo requirements.txt lists the supported dependency versions.
     echo This launcher does not download or install runtime files.
     pause
     exit /b 12
