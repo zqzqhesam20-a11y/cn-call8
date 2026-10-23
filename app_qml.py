@@ -877,14 +877,10 @@ class AppController(QObject):
         # START ADB TRANSFER
         # ==========================================
 
-        # Always push the CONTENTS of the selected source directory
-        # into the configured Android destination, never the source
-        # directory itself.
-        push_source = (
-            str(source) + "/."
-            if source.is_dir()
-            else str(source)
-        )
+        # Pass the source root unchanged. ADBEngine expands directories to
+        # source/* so an existing Android destination never gets source-name
+        # appended (for example Saved/saved).
+        push_source = str(source)
 
         started = 0
         for serial in target_devices:
