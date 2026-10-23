@@ -379,15 +379,30 @@ def test_paths_and_ui():
     assert "if (appController.useWirelessSource())" in qml
     assert "if (appController.useUsbSource())" in qml
 
-    # Shipping packages must use the shared SERVER06 runtime, not PyInstaller.
+    # Shipping launchers must avoid CMD codepage corruption for Arabic UNC components.
     launcher = Path("Start-KAFIANET-CONTROL-PRO.cmd").read_text(encoding="utf-8")
-    runtime_root = r"\\SERVER06\c$\العابي\222\66\الاخييير\py"
-    assert runtime_root in launcher
-    assert "PYTHON_EXE=%PYTHON_ROOT%\\python.exe" in launcher
-    assert 'PYTHONHOME=%PYTHON_ROOT%' in launcher
-    assert "--qt-import-smoke-test" in launcher
-    assert "kafianet_external_runtime.py" in launcher
+    assert all(ord(char) < 128 for char in launcher)
+    assert "Start-KAFIANET-CONTROL-PRO.ps1" in launcher
+    assert "powershell.exe" in launcher
+
+    external_launcher = Path("Start-KAFIANET-CONTROL-PRO.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert all(ord(char) < 128 for char in external_launcher)
+    assert "SERVER06\\c$" in external_launcher
+    assert "0x0639" in external_launcher
+    assert "0x062E" in external_launcher
+    assert "PYTHONHOME" in external_launcher
+    assert "PYTHONPATH" in external_launcher
+    assert "--qt-import-smoke-test" in external_launcher
+    assert "kafianet_external_runtime.py" in external_launcher
+    assert "Read-Host" in external_launcher
+    assert "Invoke-WebRequest" not in external_launcher
+    assert "pip install" not in external_launcher
+    assert "vc_redist" not in external_launcher
+
     bootstrap = Path("kafianet_external_runtime.py").read_text(encoding="utf-8")
+    runtime_root = r"\\SERVER06\c$\العابي\222\66\الاخييير\py"
     assert runtime_root in bootstrap
     assert "os.add_dll_directory" in bootstrap
     assert "QT_QPA_PLATFORM_PLUGIN_PATH" in bootstrap
