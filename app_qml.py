@@ -877,8 +877,9 @@ class AppController(QObject):
         # START ADB TRANSFER
         # ==========================================
 
-        # Pass the source root unchanged. ADBEngine sends its immediate
-        # children as explicit ADB sources, preventing a nested Saved/saved.
+        # Pass the source root unchanged. ADBEngine either transfers this
+        # directory to the exact remote parent (when names match) or passes
+        # direct children to the target root, avoiding nested Saved/saved.
         push_source = str(source)
 
         started = 0
