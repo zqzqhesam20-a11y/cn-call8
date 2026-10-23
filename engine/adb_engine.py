@@ -519,11 +519,17 @@ class ADBEngine(QObject):
             return None
 
     @staticmethod
-    def _adb_source_argument(source_path):
-        """Push directory contents, not the root directory as a child."""
+    def _adb_source_arguments(source_path):
+        """Return directory children as explicit ADB sources (no root nesting)."""
         if source_path.is_dir():
-            return str(source_path / "*")
-        return str(source_path)
+            return [
+                str(path)
+                for path in sorted(
+                    source_path.iterdir(),
+                    key=lambda item: item.name.casefold()
+                )
+            ]
+        return [str(source_path)]
 
     @staticmethod
     def _combined_progress_percent(total_bytes, offset_bytes, attempt_bytes):
@@ -717,8 +723,13 @@ class ADBEngine(QObject):
                 self.finished.emit(True, "المصدر فارغ؛ تم تجهيز مجلد الوجهة")
                 return
 
-            adb_source = self._adb_source_argument(source_path)
-            print("ADB SOURCE ARGUMENT:", adb_source)
+            adb_sources = self._adb_source_arguments(source_path)
+            if not adb_sources:
+                self.progressChanged.emit(100, "0 B/s", "00:00")
+                self.statusChanged.emit("اكتمل النسخ")
+                self.finished.emit(True, "المصدر فارغ؛ تم تجهيز مجلد الوجهة")
+                return
+            print("ADB SOURCE ARGUMENT COUNT:", len(adb_sources))
 
             print()
             print("========================================")
@@ -737,7 +748,7 @@ class ADBEngine(QObject):
                 device,
                 "push",
                 "--sync",
-                adb_source,
+                *adb_sources,
                 destination
             ]
 
