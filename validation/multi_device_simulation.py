@@ -379,6 +379,25 @@ def test_paths_and_ui():
     assert "if (appController.useWirelessSource())" in qml
     assert "if (appController.useUsbSource())" in qml
 
+    # Shipping packages must use the shared SERVER06 runtime, not PyInstaller.
+    launcher = Path("Start-KAFIANET-CONTROL-PRO.cmd").read_text(encoding="utf-8")
+    runtime_root = r"\\SERVER06\c$\العابي\222\66\الاخييير\py"
+    assert runtime_root in launcher
+    assert "PYTHON_EXE=%PYTHON_ROOT%\\python.exe" in launcher
+    assert "--qt-import-smoke-test" in launcher
+    assert "from PySide6.QtWidgets import QApplication" in current
+    assert "QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS" in current
+
+    for workflow_path in (
+        Path(".github/workflows/build-windows.yml"),
+        Path(".github/workflows/build-windows-runtime.yml"),
+    ):
+        workflow = workflow_path.read_text(encoding="utf-8")
+        assert "PyInstaller" not in workflow
+        assert "https://aka.ms/vc14/vc_redist.x64.exe" not in workflow
+        assert "python314.dll" not in workflow
+        assert "Forbidden runtime file" in workflow
+
 
 def run_once():
     controller = make_controller()
