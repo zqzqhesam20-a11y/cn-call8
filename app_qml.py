@@ -877,9 +877,8 @@ class AppController(QObject):
         # START ADB TRANSFER
         # ==========================================
 
-        # Pass the source root unchanged. ADBEngine expands directories to
-        # source/* so an existing Android destination never gets source-name
-        # appended (for example Saved/saved).
+        # Pass the source root unchanged. ADBEngine sends its immediate
+        # children as explicit ADB sources, preventing a nested Saved/saved.
         push_source = str(source)
 
         started = 0
