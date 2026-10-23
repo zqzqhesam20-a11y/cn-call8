@@ -387,6 +387,9 @@ def test_paths_and_ui():
     assert "--qt-import-smoke-test" in launcher
     assert "from PySide6.QtWidgets import QApplication" in current
     assert "QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS" in current
+    assert "pyside_parts < (6, 10, 1)" in current
+    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    assert "PySide6>=6.10.1,<7" in requirements
 
     for workflow_path in (
         Path(".github/workflows/build-windows.yml"),
