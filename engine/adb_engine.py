@@ -419,9 +419,21 @@ class ADBEngine(QObject):
             "00:00"
         )
 
+    def _device_is_connected(self, device):
+        """Return whether ADB currently sees this serial as an online device."""
+        try:
+            result = self._run(["-s", device, "get-state"], timeout=5)
+            return (
+                result.returncode == 0
+                and result.stdout.strip().lower() == "device"
+            )
+        except Exception as exc:
+            print("ADB DEVICE STATE CHECK FAILED:", device, exc)
+            return False
+
     def _wait_for_device_reconnect(self, device):
         self.statusChanged.emit(
-            "الهاتف مفصول — بانتظار إعادة التوصيل..."
+            "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..."
         )
 
         print(
@@ -453,7 +465,7 @@ class ADBEngine(QObject):
                     and result.stdout.strip().lower() == "device"
                 ):
                     self.statusChanged.emit(
-                        "تمت إعادة توصيل الهاتف — استئناف النقل..."
+                        "تمت إعادة توصيل الهاتف — استكمال النسخ..." 
                     )
 
                     print(
@@ -512,6 +524,7 @@ class ADBEngine(QObject):
     ):
 
         process = None
+        requested_destination = destination
 
         try:
 
@@ -691,6 +704,7 @@ class ADBEngine(QObject):
                 "-s",
                 device,
                 "push",
+                "--sync",
                 str(source_path),
                 destination
             ]
@@ -1047,6 +1061,40 @@ class ADBEngine(QObject):
                     "ADB STDERR:",
                     stderr_text
                 )
+
+            # A disconnected handset often makes adb push exit with a transport error.
+            # Wait for the same serial to return, then retry with --sync so files already
+            # copied successfully are not needlessly sent again.
+            if not self._device_is_connected(device):
+                self.statusChanged.emit(
+                    "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..."
+                )
+                print("ADB PUSH INTERRUPTED; WAITING FOR RECONNECT:", device)
+                if self._wait_for_device_reconnect(device):
+                    if self._cancel_event.is_set():
+                        self.finished.emit(
+                            False,
+                            "تم إلغاء النسخ أثناء انتظار إعادة توصيل الهاتف"
+                        )
+                        return
+
+                    self._process_paused = False
+                    self._pause_event.set()
+                    retry_thread = threading.Thread(
+                        target=self._push_thread,
+                        args=(device, str(source_path), requested_destination),
+                        name=f"ADB-push-resume-{device}",
+                        daemon=True
+                    )
+                    self._thread = retry_thread
+                    retry_thread.start()
+                    return
+
+                self.finished.emit(
+                    False,
+                    "تعذر استعادة اتصال الهاتف أو تم إلغاء النسخ"
+                )
+                return
 
             self.finished.emit(
                 False,
