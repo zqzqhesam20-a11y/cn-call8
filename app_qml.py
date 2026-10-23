@@ -1,5 +1,6 @@
 import sys
 import os
+import threading
 from pathlib import Path
 
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
@@ -72,6 +73,7 @@ class AppController(QObject):
     usbChanged = Signal(str)
     destinationChanged = Signal(str)
     adbDevicesChanged = Signal(list)
+    adbDiscoveryCompleted = Signal(list)
 
     def __init__(self):
         super().__init__()
@@ -133,18 +135,39 @@ class AppController(QObject):
         self._device_info = {}
 
         self.current_source = "WIRELESS"
+        self._adb_discovery_lock = threading.Lock()
+        self._adb_discovery_thread = None
+        self.adbDiscoveryCompleted.connect(self._apply_adb_devices)
 
-    @Slot()
+    @Slot(result=bool)
     def useWirelessSource(self):
-        self.current_source = "WIRELESS"
-        self.source_root = build_server_source_root()
-        print("SOURCE SELECTED: WIRELESS", self.source_root)
+        source = build_server_source_root()
+        if not source.is_dir():
+            self.messageChanged.emit(
+                f"تعذر الوصول إلى مصدر الشبكة: {source}"
+            )
+            return False
 
-    @Slot()
+        self.current_source = "WIRELESS"
+        self.source_root = source
+        self.messageChanged.emit(f"تم اختيار مصدر الشبكة: {source}")
+        print("SOURCE SELECTED: WIRELESS", self.source_root)
+        return True
+
+    @Slot(result=bool)
     def useUsbSource(self):
+        source = build_usb_source_root()
+        if not source.is_dir():
+            self.messageChanged.emit(
+                f"مجلد USB غير موجود أو غير متاح: {source}"
+            )
+            return False
+
         self.current_source = "USB"
-        self.source_root = Path(r"D:\games") / SERVER_GAMES_FOLDER
+        self.source_root = source
+        self.messageChanged.emit(f"تم اختيار مصدر USB: {source}")
         print("SOURCE SELECTED: USB", self.source_root)
+        return True
 
 
         print("CONTROLLER READY")
@@ -293,9 +316,11 @@ class AppController(QObject):
 
     def _emit_operation_state(self):
         self.transferBatchChanged.emit(self._operation_rows())
-        self._set_operation_state(
-            "ACTIVE" if self._active_operations else "IDLE"
+        active = any(
+            not operation.get("completed", False)
+            for operation in self._active_operations.values()
         )
+        self._set_operation_state("ACTIVE" if active else "IDLE")
 
     def _start_operation(self, operation):
         serial = operation["serial"]
@@ -409,9 +434,40 @@ class AppController(QObject):
 
     @Slot(result=list)
     def getADBDevices(self):
+        # Synchronous compatibility entry point for non-UI callers/tests.
+        return self._apply_adb_devices(self.adb_engine.get_devices())
 
-        devices = self.adb_engine.get_devices()
+    @Slot()
+    def refreshADBDevices(self):
+        # ADB commands can stall on disconnected devices; never run discovery
+        # directly on the Qt UI thread.
+        with self._adb_discovery_lock:
+            if (
+                self._adb_discovery_thread is not None
+                and self._adb_discovery_thread.is_alive()
+            ):
+                return
 
+            self._adb_discovery_thread = threading.Thread(
+                target=self._discover_adb_devices,
+                name="KafiaNet-ADB-Discovery",
+                daemon=True
+            )
+            worker = self._adb_discovery_thread
+
+        worker.start()
+
+    def _discover_adb_devices(self):
+        try:
+            devices = self.adb_engine.get_devices()
+        except Exception as exc:
+            print("ADB DISCOVERY FAILED:", exc)
+            devices = []
+        self.adbDiscoveryCompleted.emit(devices)
+
+    @Slot(list)
+    def _apply_adb_devices(self, devices):
+        devices = list(devices or [])
         print("ADB DEVICES:", devices)
 
         available_serials = {
@@ -435,7 +491,6 @@ class AppController(QObject):
             )
 
         qml_devices = []
-
         for d in devices:
             qml_devices.append(
                 {
@@ -446,7 +501,6 @@ class AppController(QObject):
             )
 
         self.adbDevicesChanged.emit(qml_devices)
-
         return devices
 
 
@@ -497,7 +551,7 @@ class AppController(QObject):
         target_devices = list(self.selected_devices)
 
         if not target_devices and self.selected_device:
-            target_devices = []
+            target_devices = [self.selected_device]
 
         if not target_devices:
 
@@ -510,7 +564,7 @@ class AppController(QObject):
         # CHECK SOURCE
         # ==========================================
 
-        if not self.source_root.exists():
+        if not self.source_root.is_dir():
 
             print(
                 "SOURCE NOT FOUND:",
@@ -751,24 +805,18 @@ class AppController(QObject):
         print("==============================")
 
         target_devices = list(self.selected_devices)
-
         if not target_devices and self.selected_device:
             target_devices = [self.selected_device]
 
         if not target_devices:
-            devices = self.adb_engine.get_devices()
-
-            if devices:
-                self.selected_device = devices[0].get(
-                    "serial",
-                    ""
-                )
-
-        if not self.selected_device:
-            self.messageChanged.emit(
-                "لا يوجد جهاز أندرويد متصل"
+            self._reject_operation(
+                "يرجى تحديد هاتف واحد على الأقل قبل تشغيل اللعبة."
             )
             return
+
+        # Launching supports one explicitly selected target. For multi-select,
+        # use the first selected serial consistently with selected_device.
+        self.selected_device = target_devices[0]
 
         package_id = ADB_PACKAGE_IDS.get(
             game_name
