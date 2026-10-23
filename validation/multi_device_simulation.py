@@ -537,8 +537,12 @@ def test_paths_and_ui():
     assert "PYTHONPATH" in external_launcher
     assert "--qt-import-smoke-test" in external_launcher
     assert "kafianet_external_runtime.py" in external_launcher
-    assert "Start-Process" in external_launcher
-    assert "-WindowStyle Hidden" in external_launcher
+    # The VBS hides PowerShell itself; the Qt app process must not be
+    # created with a hidden window style or the desktop launch may appear blank.
+    assert "& $pythonExe $bootstrap" in external_launcher
+    assert "$appProcess = Start-Process -FilePath $pythonExe" not in external_launcher
+    assert "Start-Process -FilePath $pythonExe" not in external_launcher
+    assert "-WindowStyle Hidden" not in external_launcher
     assert "WScript.Shell" in external_launcher
     assert "Invoke-WebRequest" not in external_launcher
     assert "pip install" not in external_launcher
