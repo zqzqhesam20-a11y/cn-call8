@@ -12,15 +12,15 @@
 
 1. تأكّد من أن SERVER06 متصل وأن حساب Windows يستطيع الوصول إلى مشاركة C$.
 2. تأكّد أن بيئة Python الخارجية تحتوي على Lib وDLLs وPySide6 بإصدار 6.10.1 أو أحدث، إضافة إلى psutil؛ هذا الإصدار الأدنى مطلوب لدعم Python 3.14.
-3. شغّل Start-KAFIANET-CONTROL-PRO.cmd، أو استخدم اختصار التطبيق الذي ينشئه المثبّت. ملف CMD مقصود أن يبقى ASCII فقط؛ وهو يشغّل Start-KAFIANET-CONTROL-PRO.ps1 الذي يبني أسماء المجلدات العربية بنقاط Unicode، لتجنب تلف مسار UNC بسبب ترميز CMD. بعد ذلك يستدعي kafianet_external_runtime.py لتهيئة DLL وQt/QML.
-4. يقوم ملف التشغيل بفحص مسار Python واستيراد PySide6.QtWidgets وإنشاء QApplication اختباريًا قبل فتح الواجهة. إذا فشل الاختبار، يعرض الخطأ ويوقف التشغيل دون تنزيل runtime أو تثبيته.
+3. شغّل اختصار التطبيق الذي ينشئه المثبّت؛ فهو يستخدم Launch-KAFIA-NET-CONTROL-PRO.vbs لتشغيل PowerShell وPython مخفيين، دون نافذة ترمنال. يبقى Start-KAFIANET-CONTROL-PRO.cmd متاحًا للتشغيل اليدوي، ويحوّل إلى المشغّل المخفي. يبني Start-KAFIANET-CONTROL-PRO.ps1 أسماء المجلدات العربية بنقاط Unicode لتجنب تلف مسار UNC، ثم يهيّئ kafianet_external_runtime.py مسارات DLL وQt/QML.
+4. يقوم ملف التشغيل بفحص مسار Python واستيراد PySide6.QtWidgets وإنشاء QApplication اختباريًا قبل فتح الواجهة. إذا فشل الاختبار، يعرض رسالة خطأ في نافذة تنبيه بدل إبقاء نافذة ترمنال مفتوحة، دون تنزيل runtime أو تثبيته.
 
 لا تشغّل app_qml.py مباشرةً إذا أردت استخدام المفسّر المشترك؛ شغّل ملف CMD لكي يستخدم المسار المحدد أعلاه ويهيّئ مسارات DLL وQt.
 
 ## التوزيع والبناء
 
 - build-windows.yml ينشئ مثبّتًا يحتوي ملفات التطبيق وملفات ADB اللازمة فقط.
-- build-windows-runtime.yml ينشئ أرشيف source-only للتوزيع اليدوي.
+- build-windows-runtime.yml ينشئ أرشيف source-only للتوزيع اليدوي، ويضمّن مشغّل VBS المخفي.
 - مسارات البناء تتحقق من عدم وجود python.exe أو python*.dll أو مثبت Visual C++ داخل الحمولة.
 - يستخدم CI Python المثبّت على عامل GitHub للاختبارات فقط؛ لا ينسخ runtime إلى الحزمة أو المستودع.
 - لا تستخدم ملف PyInstaller spec لبناء إصدار runtime خارجي؛ PyInstaller يضمّن مفسّر Python داخل التطبيق المجمد.
