@@ -1,30 +1,30 @@
-name: Build Self-contained Windows Installer
+name: Build External-Python Source Package
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
+  package:
     runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python for validation only
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install validation dependencies on the runner
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) {
-            python -m pip install -r requirements.txt
-          }
-          python -m pip install pyinstaller
+          python -m pip install -r requirements.txt
 
       - name: Run regression simulation
         shell: pwsh
@@ -35,95 +35,54 @@ jobs:
           $ErrorActionPreference = "Stop"
           python validation\multi_device_simulation.py
 
-      - name: Build self-contained application
+      - name: Prepare external-Python package
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m PyInstaller --clean --noconfirm KAFIA_NET_CONTROL_PRO.spec
-          if (-not (Test-Path "dist\KAFIA_NET_CONTROL_PRO\KAFIA_NET_CONTROL_PRO.exe")) {
-            throw "The packaged application executable was not produced."
+          $stage = "KAFIA_NET_CONTROL_PRO"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item "app_qml.py" "$stage\app_qml.py"
+          Copy-Item "games.json" "$stage\games.json"
+          Copy-Item "Start-KAFIANET-CONTROL-PRO.cmd" "$stage\Start-KAFIANET-CONTROL-PRO.cmd"
+
+          foreach ($directory in @("engine", "qml", "assets", "ui")) {
+            if (-not (Test-Path $directory -PathType Container)) {
+              throw "Required application directory is missing: $directory"
+            }
+            Copy-Item $directory "$stage\$directory" -Recurse
           }
 
-      - name: Smoke-test packaged Qt startup
-        shell: pwsh
-        env:
-          QT_QPA_PLATFORM: offscreen
-          PYTHONUTF8: "1"
-        run: |
-          $ErrorActionPreference = "Stop"
-          & "dist\KAFIA_NET_CONTROL_PRO\KAFIA_NET_CONTROL_PRO.exe" --qt-import-smoke-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "Packaged QtWidgets/QApplication smoke test failed with exit code $LASTEXITCODE."
+          New-Item -ItemType Directory -Force -Path "$stage\platform-tools" | Out-Null
+          Copy-Item "platform-tools\adb.exe" "$stage\platform-tools\adb.exe"
+          Copy-Item "platform-tools\AdbWinApi.dll" "$stage\platform-tools\AdbWinApi.dll"
+          Copy-Item "platform-tools\AdbWinUsbApi.dll" "$stage\platform-tools\AdbWinUsbApi.dll"
+
+          Get-ChildItem $stage -Recurse -Directory -Filter "__pycache__" |
+            Remove-Item -Recurse -Force
+          Get-ChildItem $stage -Recurse -File -Filter "*.pyc" |
+            Remove-Item -Force
+
+          $runtimeFiles = Get-ChildItem $stage -Recurse -File |
+            Where-Object {
+              $_.Name -match '^(python(?:w|3|3\d+)?\.exe|python(?:3|3\d+)?\.dll|vc_redist.*\.exe)$'
+            }
+          if ($runtimeFiles) {
+            $runtimeFiles | ForEach-Object { Write-Error "Forbidden runtime file in payload: $($_.FullName)" }
+            throw "Refusing to package Python/VC runtime files."
           }
 
-      - name: Download and verify Microsoft Visual C++ runtime
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path redist | Out-Null
-          Invoke-WebRequest -Uri "https://aka.ms/vc14/vc_redist.x64.exe" -OutFile "redist\vc_redist.x64.exe" -TimeoutSec 90
-          $signature = Get-AuthenticodeSignature "redist\vc_redist.x64.exe"
-          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft") {
-            throw "Microsoft Visual C++ Redistributable signature validation failed."
+          Write-Host "Verified: source application only; runtime remains external."
+          Compress-Archive -Path "$stage\*" -DestinationPath "KAFIA_NET_CONTROL_PRO_ExternalPython.zip" -CompressionLevel Optimal -Force
+
+          $archive = Get-Item "KAFIA_NET_CONTROL_PRO_ExternalPython.zip"
+          if ($archive.Length -gt 50000000) {
+            throw "External-Python source archive exceeds 50 MB; refusing to publish a package that may contain a runtime."
           }
+          Write-Host ("Source-only package: {0:N2} MB" -f ($archive.Length / 1MB))
 
-      - name: Install Inno Setup
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          choco install innosetup --yes --no-progress
-
-      - name: Prepare installer script
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          New-Item -ItemType Directory -Force -Path installer | Out-Null
-          @'
-          [Setup]
-          AppName=KAFIA NET CONTROL PRO
-          AppVersion=1.0.0
-          DefaultDirName={autopf}\KAFIA NET CONTROL PRO
-          DefaultGroupName=KAFIA NET CONTROL PRO
-          OutputDir=installer
-          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_Setup
-          Compression=lzma2
-          SolidCompression=yes
-          ArchitecturesInstallIn64BitMode=x64compatible
-          PrivilegesRequired=admin
-          Uninstallable=yes
-
-          [Files]
-          Source: "dist\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
-          Source: "redist\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
-
-          [Icons]
-          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
-          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
-
-          [Run]
-          Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Flags: waituntilterminated; Check: not IsVCRedistInstalled
-          Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
-
-          [Code]
-          function IsVCRedistInstalled(): Boolean;
-          var
-            Installed: Cardinal;
-          begin
-            Result := RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) and (Installed = 1);
-          end;
-          '@ | Set-Content -Path installer.iss -Encoding UTF8
-
-      - name: Build installer
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-          if (-not (Test-Path "installer\KAFIA_NET_CONTROL_PRO_Setup.exe")) {
-            throw "The installer executable was not produced."
-          }
-
-      - name: Upload installer
+      - name: Upload external-Python source package
         uses: actions/upload-artifact@v4
         with:
-          name: KAFIA_NET_CONTROL_PRO-StandaloneInstaller
-          path: installer/KAFIA_NET_CONTROL_PRO_Setup.exe
+          name: KAFIA_NET_CONTROL_PRO-ExternalPython-Source
+          path: KAFIA_NET_CONTROL_PRO_ExternalPython.zip
