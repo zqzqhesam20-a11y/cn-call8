@@ -69,12 +69,19 @@ if ($smokeExitCode -ne 0) {
     Stop-KafiaLauncher 12 "Qt startup preflight failed. Check compatible PySide6, Qt DLLs and plugins in the external Python environment."
 }
 
+# The PowerShell host itself is already hidden by the VBS launcher.
+# Do not start python.exe with -WindowStyle Hidden: that can hide the Qt
+# top-level window as well. Run it in this hidden host so QApplication can
+# show the actual application window normally.
+$previousLocation = Get-Location
 try {
-    $quotedBootstrap = '"' + $bootstrap + '"'
-    $appProcess = Start-Process -FilePath $pythonExe -ArgumentList $quotedBootstrap -WorkingDirectory $appRoot -WindowStyle Hidden -PassThru -Wait
-    $appExitCode = $appProcess.ExitCode
+    Set-Location -LiteralPath $appRoot
+    & $pythonExe $bootstrap
+    $appExitCode = $LASTEXITCODE
 } catch {
     Stop-KafiaLauncher 14 ("Unable to launch the application: " + $_.Exception.Message)
+} finally {
+    Set-Location -LiteralPath $previousLocation.Path
 }
 if ($appExitCode -ne 0) {
     Stop-KafiaLauncher $appExitCode "The application exited with an error."
