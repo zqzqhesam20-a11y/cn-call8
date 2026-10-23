@@ -305,6 +305,7 @@ class AppController(QObject):
                 "speed": operation.get("speed", "--"),
                 "eta": operation.get("eta", "--"),
                 "error": operation.get("error", ""),
+                "raw_error": operation.get("raw_error", ""),
                 "cancelled": operation.get("cancelled", False)
             }
             for operation in self._active_operations.values()
@@ -420,6 +421,94 @@ class AppController(QObject):
     def _finished(self, success, message):
         self.messageChanged.emit(message)
 
+    def _device_copy_failure_summary(self, serial, operation, raw_message):
+        """Map common OEM/Android storage denials to a useful short message."""
+        if success_or_not := bool(operation.get("kind") != "copy"):
+            return raw_message
+
+        text = str(raw_message or "")
+        lowered = text.lower()
+        permission_markers = (
+            "permission denied",
+            "remote secure_mkdirs failed",
+            "read-only file system",
+            "operation not permitted",
+            "eacces",
+            "errno 13",
+            "failed to copy",
+        )
+        if not any(marker in lowered for marker in permission_markers):
+            return raw_message
+
+        destination = str(operation.get("destination", ""))
+        if "/android/data/" in destination.lower() or destination.lower().endswith("/android/data"):
+            return (
+                "الهاتف منع الكتابة داخل Android/data. "
+                "افتح «إرشادات الإصلاح» لمعرفة السبب والخطوات المناسبة."
+            )
+
+        return (
+            "الهاتف رفض الكتابة إلى وجهة النسخ. "
+            "افتح «إرشادات الإصلاح» لمعرفة خطوات التشخيص."
+        )
+
+    @Slot(str, result=str)
+    def deviceCopyHelp(self, serial):
+        operation = self._active_operations.get(serial, {})
+        info = self._device_info.get(serial, {})
+        model = str(info.get("model") or info.get("name") or "Android")
+        manufacturer = str(info.get("manufacturer") or "")
+        brand_text = (manufacturer + " " + model).strip()
+        brand_lower = (manufacturer + " " + model).lower()
+        destination = str(operation.get("destination", ""))
+        raw_error = str(operation.get("raw_error") or operation.get("error") or "")
+
+        lines = [
+            "الجهاز: " + brand_text,
+            "",
+            "1) افتح قفل الهاتف وأبقِ الشاشة مفتوحة. إذا ظهر طلب «السماح بتصحيح USB» لهذا الكمبيوتر، وافق عليه بعد التأكد أنك تثق بهذا الكمبيوتر.",
+            "2) افتح إعدادات المطوّر وتأكد من تفعيل USB debugging. افصل الكابل وأعد توصيله، ثم جرّب منفذًا وكابل بيانات آخر عند الحاجة.",
+        ]
+
+        if any(name in brand_lower for name in ("xiaomi", "redmi", "poco", "شاومي", "ريدمي")):
+            lines.extend([
+                "",
+                "شاومي / Redmi / POCO (MIUI أو HyperOS):",
+                "• الإعدادات > الإعدادات الإضافية > خيارات المطوّر > USB debugging.",
+                "• إذا كان الخيار موجودًا وكان إصدار النظام يطلبه، راجع USB debugging (Security settings) واقبل التحذير بعد قراءته. قد يتطلب النظام موافقة حساب Xiaomi أو شروطًا إضافية.",
+                "• خيار Install via USB يتعلق أساسًا بتثبيت APK؛ تفعيله وحده لا يمنح بالضرورة حق الكتابة إلى Android/data.",
+            ])
+        elif any(name in brand_lower for name in ("oneplus", "oppo", "realme", "ون بلس")):
+            lines.extend([
+                "",
+                "OnePlus / OPPO / realme:",
+                "• الإعدادات > إعدادات النظام (أو الإعدادات الإضافية) > خيارات المطوّر > USB debugging.",
+                "• وافق على طلب تصحيح USB على الهاتف. ويمكن ضبط USB default configuration على File transfer إذا كان اتصال USB نفسه غير مستقر.",
+            ])
+        else:
+            lines.extend([
+                "",
+                "الإعدادات العامة:",
+                "• خيارات المطوّر > USB debugging، ثم اقبل مفتاح RSA لهذا الكمبيوتر على شاشة الهاتف.",
+            ])
+
+        if "/android/data/" in destination.lower() or destination.lower().endswith("/android/data"):
+            lines.extend([
+                "",
+                "مهم بخصوص Android/data:",
+                "إذا كان الخطأ Permission denied أو remote secure_mkdirs failed، فقد يمنع إصدار Android أو واجهة الشركة الكتابة إلى هذا المسار عبر ADB. خيارات USB debugging لا تتجاوز هذا القيد دائمًا. لا يحاول التطبيق تعطيل حماية النظام أو استعمال صلاحيات root.",
+                "الحل الآمن هو استخدام طريقة نقل يسمح بها الهاتف/النظام، أو اختيار مجلد وجهة غير محمي إذا كانت اللعبة تدعم ذلك. إذا كانت اللعبة تشترط Android/data وكان النظام يمنع الكتابة إليه، فسنعرض الرفض بدل الإبلاغ عن نجاح وهمي.",
+            ])
+
+        if raw_error:
+            lines.extend([
+                "",
+                "رسالة ADB الأصلية:",
+                raw_error,
+            ])
+
+        return "\\n".join(lines)
+
     def _finished_for_device(self, serial, success, message):
         print(
             "FINISHED:",
@@ -431,6 +520,10 @@ class AppController(QObject):
         operation = self._active_operations.get(serial)
         if operation is None or operation.get("completed"):
             return
+
+        if not success and operation.get("kind") == "copy":
+            operation["raw_error"] = str(message or "")
+            message = self._device_copy_failure_summary(serial, operation, message)
 
         operation["completed"] = True
         operation["status"] = (
