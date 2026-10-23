@@ -18,6 +18,13 @@ from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
+# CI/runtime smoke test: importing QtWidgets alone is insufficient because
+# Qt's platform plugins are loaded when QApplication is constructed.
+# Build verification invokes this mode against the frozen executable.
+if "--qt-import-smoke-test" in sys.argv:
+    QApplication([])
+    sys.exit(0)
+
 from engine.transfer_engine import TransferEngine
 from engine.adb_engine import ADBEngine
 from engine.path_manager import PathManager
