@@ -30,13 +30,21 @@ set "PATH=%PYTHON_ROOT%;%PYTHON_ROOT%\DLLs;%SITE_PACKAGES%\PySide6;%SITE_PACKAGE
 set "PYTHONPATH=%APP_ROOT%;%SITE_PACKAGES%;%PYTHONPATH%"
 set "PYTHONUTF8=1"
 
-rem Preflight the exact QtWidgets import that previously failed. This only tests;
-rem it does not install or copy Python, Qt, PySide6, or any runtime DLLs.
-"%PYTHON_EXE%" -c "import sys; print('Python runtime:', sys.executable); import PySide6; print('PySide6:', PySide6.__version__); from PySide6.QtWidgets import QApplication; print('QtWidgets import: OK')"
-if errorlevel 1 (
+rem Preflight QtWidgets and construct QApplication using Qt's offscreen plugin.
+rem This tests the native Qt DLL/plugin load before starting the desktop UI.
+set "KAFIANET_OLD_QT_QPA_PLATFORM=%QT_QPA_PLATFORM%"
+set "QT_QPA_PLATFORM=offscreen"
+"%PYTHON_EXE%" "%APP_ROOT%app_qml.py" --qt-import-smoke-test
+set "QT_SMOKE_EXIT=%ERRORLEVEL%"
+if defined KAFIANET_OLD_QT_QPA_PLATFORM (
+    set "QT_QPA_PLATFORM=%KAFIANET_OLD_QT_QPA_PLATFORM%"
+) else (
+    set "QT_QPA_PLATFORM="
+)
+if not "%QT_SMOKE_EXIT%"=="0" (
     echo.
-    echo [KAFIA NET CONTROL PRO] The external Python runtime or its PySide6 dependencies are not ready.
-    echo Confirm PySide6 and psutil are installed in:
+    echo [KAFIA NET CONTROL PRO] Qt startup failed using the external Python runtime.
+    echo Check the PySide6 version, Qt DLLs, platform plugins, and psutil in:
     echo %PYTHON_ROOT%
     echo This launcher does not download or install runtime files.
     pause
