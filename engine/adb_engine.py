@@ -115,6 +115,7 @@ class ADBEngine(QObject):
         self._current_process = None
         self._process_lock = threading.Lock()
         self._process_paused = False
+        self._reconnect_retry_count = 0
         self._cancelled_by_user = False
 
     def _get_adb_path(self):
@@ -1005,6 +1006,7 @@ class ADBEngine(QObject):
                     ) + "/s",
                     "00:00"
                 )
+                self._reconnect_retry_count = 0
 
                 self.statusChanged.emit(
                     "اكتمل النسخ"
@@ -1065,7 +1067,22 @@ class ADBEngine(QObject):
             # A disconnected handset often makes adb push exit with a transport error.
             # Wait for the same serial to return, then retry with --sync so files already
             # copied successfully are not needlessly sent again.
-            if not self._device_is_connected(device):
+            stderr_lower = (stderr_text or "").lower()
+            disconnect_markers = (
+                "device offline",
+                "device not found",
+                "no devices/emulators found",
+                "device disconnected",
+                "transport error",
+                "connection reset",
+                "error: closed",
+            )
+            looks_disconnected = any(
+                marker in stderr_lower
+                for marker in disconnect_markers
+            )
+            device_connected = self._device_is_connected(device)
+            if not device_connected or looks_disconnected:
                 self.statusChanged.emit(
                     "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..."
                 )
@@ -1078,6 +1095,13 @@ class ADBEngine(QObject):
                         )
                         return
 
+                    if self._reconnect_retry_count >= 10:
+                        self.finished.emit(
+                            False,
+                            "تكرر فشل اتصال الهاتف بعد إعادة التوصيل؛ أعد المحاولة يدويًا."
+                        )
+                        return
+                    self._reconnect_retry_count += 1
                     self._process_paused = False
                     self._pause_event.set()
                     retry_thread = threading.Thread(
@@ -1130,6 +1154,8 @@ class ADBEngine(QObject):
             return
 
         self._pause_event.set()
+        self._process_paused = False
+        self._reconnect_retry_count = 0
 
         self._cancel_event.clear()
         self._cancelled_by_user = False
