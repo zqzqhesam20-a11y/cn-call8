@@ -45,6 +45,8 @@ jobs:
           Copy-Item "app_qml.py" "$stage\app_qml.py"
           Copy-Item "games.json" "$stage\games.json"
           Copy-Item "Start-KAFIANET-CONTROL-PRO.cmd" "$stage\Start-KAFIANET-CONTROL-PRO.cmd"
+          Copy-Item "requirements.txt" "$stage\requirements.txt"
+          Copy-Item "README.md" "$stage\README.md"
 
           foreach ($directory in @("engine", "qml", "assets", "ui")) {
             if (-not (Test-Path $directory -PathType Container)) {
