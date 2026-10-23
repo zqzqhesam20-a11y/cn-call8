@@ -22,8 +22,18 @@ from PySide6.QtQml import QQmlApplicationEngine
 # Qt's platform plugins are loaded when QApplication is constructed.
 # Build verification invokes this mode against the frozen executable.
 if "--qt-import-smoke-test" in sys.argv:
+    pyside_version = getattr(__import__("PySide6"), "__version__", "0.0.0")
     print("PYTHON_RUNTIME:", sys.executable)
-    print("PYSIDE6_VERSION:", getattr(__import__("PySide6"), "__version__", "unknown"))
+    print("PYSIDE6_VERSION:", pyside_version)
+    try:
+        pyside_parts = tuple(int(part) for part in pyside_version.split(".")[:3])
+    except (TypeError, ValueError):
+        pyside_parts = (0, 0, 0)
+    if pyside_parts < (6, 10, 1):
+        raise RuntimeError(
+            "Python 3.14 requires PySide6 6.10.1 or newer; "
+            f"found {pyside_version}."
+        )
     app = QApplication([])
     print("QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS")
     sys.exit(0)
