@@ -138,6 +138,9 @@ class AppController(QObject):
         self._adb_discovery_lock = threading.Lock()
         self._adb_discovery_thread = None
         self.adbDiscoveryCompleted.connect(self._apply_adb_devices)
+        print("CONTROLLER READY")
+        print("SOURCE:", self.source_root)
+        print("DEST:", self.destination_root)
 
     @Slot(result=bool)
     def useWirelessSource(self):
@@ -169,10 +172,6 @@ class AppController(QObject):
         print("SOURCE SELECTED: USB", self.source_root)
         return True
 
-
-        print("CONTROLLER READY")
-        print("SOURCE:", self.source_root)
-        print("DEST:", self.destination_root)
 
 
     def _transfer_progress(self, percent, speed, eta):
