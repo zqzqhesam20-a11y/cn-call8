@@ -198,9 +198,14 @@ def test_adb_source_pattern_and_progress_offset():
         source = Path(directory) / "saved"
         source.mkdir()
         (source / "asset.pak").write_bytes(b"data")
-        assert ADBEngine._adb_source_argument(source) == str(source / "*")
+        nested = source / "Paks"
+        nested.mkdir()
+        assert ADBEngine._adb_source_arguments(source) == [
+            str(source / "asset.pak"),
+            str(nested),
+        ]
         asset = source / "asset.pak"
-        assert ADBEngine._adb_source_argument(asset) == str(asset)
+        assert ADBEngine._adb_source_arguments(asset) == [str(asset)]
 
     assert ADBEngine._combined_progress_percent(1000, 600, 0) == 60
     assert ADBEngine._combined_progress_percent(1000, 600, 150) == 75
