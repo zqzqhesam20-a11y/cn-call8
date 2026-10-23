@@ -1,11 +1,11 @@
 @echo off
 setlocal
-rem Keep this CMD launcher ASCII-only; PowerShell resolves the Unicode UNC path safely.
-set "PS_LAUNCHER=%~dp0Start-KAFIANET-CONTROL-PRO.ps1"
-if not exist "%PS_LAUNCHER%" (
-    echo [KAFIA NET CONTROL PRO] PowerShell launcher is missing.
+rem Launch through the windowless WScript host. This wrapper exits immediately.
+set "VBS_LAUNCHER=%~dp0Launch-KAFIA-NET-CONTROL-PRO.vbs"
+if not exist "%VBS_LAUNCHER%" (
+    echo [KAFIA NET CONTROL PRO] The hidden launcher is missing.
     pause
     exit /b 2
 )
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%PS_LAUNCHER%"
-exit /b %ERRORLEVEL%
+start "" "%SystemRoot%\System32\wscript.exe" "%VBS_LAUNCHER%"
+exit /b 0
