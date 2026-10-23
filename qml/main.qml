@@ -44,6 +44,70 @@ ApplicationWindow {
     property bool operationPaused: false
     property var transferDevices: []
     property bool transferPanelDismissed: false
+
+    // Stable model: update existing rows in place so progress ticks do not
+    // reset ListView's model or jump the user's scroll position.
+    ListModel {
+        id: transferDevicesModel
+    }
+
+    function syncTransferDeviceModel(devices) {
+        const incomingRows = devices || []
+        const desiredSerials = []
+
+        for (let i = 0; i < incomingRows.length; ++i) {
+            const incoming = incomingRows[i]
+            const serial = String(incoming.serial || "")
+            if (serial.length === 0)
+                continue
+
+            desiredSerials.push(serial)
+            const rowData = {
+                serial: serial,
+                deviceModel: String(incoming.model || "Android"),
+                game: String(incoming.game || ""),
+                kind: String(incoming.kind || ""),
+                status: String(incoming.status || "انتظار"),
+                percent: Number(incoming.percent === undefined ? 0 : incoming.percent),
+                operation: String(incoming.operation || ""),
+                speed: String(incoming.speed || "--"),
+                eta: String(incoming.eta || "--"),
+                error: String(incoming.error || ""),
+                cancelled: Boolean(incoming.cancelled)
+            }
+
+            let rowIndex = -1
+            for (let j = 0; j < transferDevicesModel.count; ++j) {
+                if (transferDevicesModel.get(j).serial === serial) {
+                    rowIndex = j
+                    break
+                }
+            }
+
+            if (rowIndex < 0) {
+                transferDevicesModel.append(rowData)
+            } else {
+                const roleNames = Object.keys(rowData)
+                const existingRow = transferDevicesModel.get(rowIndex)
+                for (let k = 0; k < roleNames.length; ++k) {
+                    const roleName = roleNames[k]
+                    if (existingRow[roleName] !== rowData[roleName]) {
+                        transferDevicesModel.setProperty(
+                            rowIndex, roleName, rowData[roleName]
+                        )
+                    }
+                }
+            }
+        }
+
+        // Remove only devices that are no longer in the controller's snapshot.
+        // Ordinary percentage/speed updates never clear or replace the model.
+        for (let i = transferDevicesModel.count - 1; i >= 0; --i) {
+            const serial = transferDevicesModel.get(i).serial
+            if (desiredSerials.indexOf(serial) < 0)
+                transferDevicesModel.remove(i)
+        }
+    }
     property string operationMessage: ""
     property string deviceCopyHelpTitle: "إرشادات إصلاح النسخ"
     property string deviceCopyHelpText: ""
@@ -1019,8 +1083,9 @@ ApplicationWindow {
         }
 
         function onTransferBatchChanged(devices) {
-            window.transferDevices = devices
-            if (devices && devices.length > 0)
+            window.transferDevices = devices || []
+            window.syncTransferDeviceModel(window.transferDevices)
+            if (window.transferDevices.length > 0)
                 window.transferPanelDismissed = false
         }
 
@@ -1227,11 +1292,12 @@ ApplicationWindow {
             }
 
             ListView {
+                id: transferListView
                 width: parent.width
                 height: parent.height - 104
                 clip: true
                 spacing: 8
-                model: window.transferDevices
+                model: transferDevicesModel
 
                 ScrollBar.vertical: ScrollBar {
                     policy: ScrollBar.AsNeeded
@@ -1244,9 +1310,9 @@ ApplicationWindow {
                     radius: 12
                     color: "#181F2B"
                     border.width: 1
-                    border.color: modelData.status === "فشل"
+                    border.color: status === "فشل"
                                   ? "#A83232"
-                                  : modelData.status === "اكتمل"
+                                  : status === "اكتمل"
                                     ? "#247A58"
                                     : "#29384A"
 
@@ -1257,7 +1323,7 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.model
+                            text: deviceModel
                             color: "white"
                             font.pixelSize: 14
                             font.bold: true
@@ -1266,7 +1332,7 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: "Serial: " + modelData.serial
+                            text: "Serial: " + serial
                             color: "#8F9CAF"
                             font.pixelSize: 11
                             elide: Text.ElideRight
@@ -1274,7 +1340,7 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.game
+                            text: game
                             color: "#DCE4F0"
                             font.pixelSize: 11
                             elide: Text.ElideRight
@@ -1282,10 +1348,10 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: "الحالة: " + modelData.status
-                            color: modelData.status === "فشل"
+                            text: "الحالة: " + status
+                            color: status === "فشل"
                                    ? "#FF7777"
-                                   : modelData.status === "اكتمل"
+                                   : status === "اكتمل"
                                      ? "#42D995"
                                      : "#00D9FF"
                             font.pixelSize: 12
@@ -1299,10 +1365,10 @@ ApplicationWindow {
                             color: "#252C3A"
 
                             Rectangle {
-                                visible: modelData.percent >= 0
+                                visible: percent >= 0
                                 width: parent.width
                                        * Math.max(0, Math.min(
-                                           100, modelData.percent
+                                           100, percent
                                        )) / 100
                                 height: parent.height
                                 radius: 4
@@ -1312,8 +1378,8 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.percent >= 0
-                                  ? modelData.percent + "%"
+                            text: percent >= 0
+                                  ? percent + "%"
                                   : "جارٍ التنفيذ..."
                             color: "#DCE4F0"
                             font.pixelSize: 11
@@ -1321,20 +1387,20 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.operation
+                            text: operation
                                   + "  |  "
-                                  + modelData.speed
+                                  + speed
                                   + "  |  ETA "
-                                  + modelData.eta
+                                  + eta
                             color: "#AAB6C8"
                             font.pixelSize: 10
                             elide: Text.ElideRight
                         }
 
                         Text {
-                            visible: modelData.error !== ""
+                            visible: error !== ""
                             width: parent.width
-                            text: modelData.error
+                            text: error
                             color: "#FF8C8C"
                             font.pixelSize: 10
                             wrapMode: Text.Wrap
@@ -1343,16 +1409,16 @@ ApplicationWindow {
                         }
 
                         Button {
-                            visible: modelData.status === "فشل"
-                                     && modelData.kind === "copy"
+                            visible: status === "فشل"
+                                     && kind === "copy"
                             width: 144
                             height: 28
                             text: "إرشادات الإصلاح"
                             onClicked: {
                                 window.deviceCopyHelpTitle =
-                                    "إصلاح النسخ — " + modelData.model
+                                    "إصلاح النسخ — " + deviceModel
                                 window.deviceCopyHelpText =
-                                    appController.deviceCopyHelp(modelData.serial)
+                                    appController.deviceCopyHelp(serial)
                                 deviceCopyHelpDialog.open()
                             }
 
@@ -1377,14 +1443,14 @@ ApplicationWindow {
 
                         Button {
                             visible: window.operationBusy
-                                     && modelData.status !== "اكتمل"
-                                     && modelData.status !== "فشل"
-                                     && modelData.status !== "ملغي"
+                                     && status !== "اكتمل"
+                                     && status !== "فشل"
+                                     && status !== "ملغي"
                             width: 88
                             height: 30
                             text: "إلغاء"
                             onClicked: appController.cancelDevice(
-                                modelData.serial
+                                serial
                             )
 
                             background: Rectangle {
