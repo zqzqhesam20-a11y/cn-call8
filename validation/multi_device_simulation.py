@@ -200,12 +200,34 @@ def test_adb_source_arguments_and_progress_offset():
         (source / "asset.pak").write_bytes(b"data")
         nested = source / "Paks"
         nested.mkdir()
-        assert ADBEngine._adb_source_arguments(source) == [
-            str(source / "asset.pak"),
-            str(nested),
-        ]
+        args, target = ADBEngine._adb_source_plan(
+            source, "/sdcard/ShadowTrackerExtra/Saved"
+        )
+        # Case-insensitive Windows path semantics allow the local "saved"
+        # directory to be passed as "Saved", pushing it to the remote parent.
+        if (source.parent / "Saved").exists():
+            assert args == [str(source.parent / "Saved")]
+            assert target == "/sdcard/ShadowTrackerExtra"
+        else:
+            assert args == [str(source / "asset.pak"), str(nested)]
+            assert target == "/sdcard/ShadowTrackerExtra/Saved"
+
         asset = source / "asset.pak"
-        assert ADBEngine._adb_source_arguments(asset) == [str(asset)]
+        file_args, file_target = ADBEngine._adb_source_plan(
+            asset, "/sdcard/ShadowTrackerExtra/Saved"
+        )
+        assert file_args == [str(asset)]
+        assert file_target == "/sdcard/ShadowTrackerExtra/Saved"
+
+        # A directory with a different name is pushed as its direct children.
+        different = source.parent / "different"
+        different.mkdir()
+        (different / "one.bin").write_bytes(b"1")
+        child_args, child_target = ADBEngine._adb_source_plan(
+            different, "/sdcard/ShadowTrackerExtra/Saved"
+        )
+        assert child_args == [str(different / "one.bin")]
+        assert child_target == "/sdcard/ShadowTrackerExtra/Saved"
 
     assert ADBEngine._combined_progress_percent(1000, 600, 0) == 60
     assert ADBEngine._combined_progress_percent(1000, 600, 150) == 75
