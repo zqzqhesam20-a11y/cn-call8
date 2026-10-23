@@ -55,6 +55,16 @@ jobs:
           if (-not $launcher.Contains('--qt-import-smoke-test')) {
             throw "Launcher is missing the Qt startup preflight."
           }
+          if (-not $launcher.Contains('kafianet_external_runtime.py')) {
+            throw "Launcher does not use the external-runtime DLL bootstrap."
+          }
+          $bootstrap = Get-Content "kafianet_external_runtime.py" -Raw
+          if (-not $bootstrap.Contains('os.add_dll_directory')) {
+            throw "External-runtime bootstrap is missing explicit DLL-directory setup."
+          }
+          if (-not $bootstrap.Contains('SERVER06\c$\العابي\222\66\الاخييير\py')) {
+            throw "External-runtime bootstrap has a different runtime path."
+          }
           if ($launcher -match 'Invoke-WebRequest|pip install|vc_redist') {
             throw "The launcher must not download or install runtime components."
           }
@@ -69,6 +79,7 @@ jobs:
           Copy-Item "app_qml.py" "$stage\app_qml.py"
           Copy-Item "games.json" "$stage\games.json"
           Copy-Item "Start-KAFIANET-CONTROL-PRO.cmd" "$stage\Start-KAFIANET-CONTROL-PRO.cmd"
+          Copy-Item "kafianet_external_runtime.py" "$stage\kafianet_external_runtime.py"
           Copy-Item "requirements.txt" "$stage\requirements.txt"
           Copy-Item "README.md" "$stage\README.md"
 
