@@ -466,7 +466,7 @@ class ADBEngine(QObject):
                     and result.stdout.strip().lower() == "device"
                 ):
                     self.statusChanged.emit(
-                        "تمت إعادة توصيل الهاتف — استكمال النسخ..." 
+                        "تمت إعادة توصيل الهاتف — استكمال النسخ..."
                     )
 
                     print(
