@@ -41,6 +41,7 @@ ApplicationWindow {
     property var adbDevices: []
     property var selectedAdbSerials: []
     property bool operationBusy: false
+    property bool operationPaused: false
     property var transferDevices: []
     property bool transferPanelDismissed: false
     property string operationMessage: ""
@@ -1011,6 +1012,10 @@ ApplicationWindow {
             window.operationBusy = state !== "IDLE"
         }
 
+        function onTransferPausedChanged(paused) {
+            window.operationPaused = paused
+        }
+
         function onTransferBatchChanged(devices) {
             window.transferDevices = devices
             if (devices && devices.length > 0)
@@ -1088,9 +1093,11 @@ ApplicationWindow {
 
                 Text {
                     Layout.fillWidth: true
-                    text: window.operationBusy
-                          ? "العملية قيد التنفيذ"
-                          : "نتيجة العملية"
+                    text: window.operationPaused
+                          ? "النقل متوقف مؤقتًا"
+                          : window.operationBusy
+                            ? "العملية قيد التنفيذ"
+                            : "نتيجة العملية"
                     color: "#00D9FF"
                     font.pixelSize: 16
                     font.bold: true
@@ -1100,6 +1107,58 @@ ApplicationWindow {
                 Row {
                     Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                     spacing: 8
+
+                    Button {
+                        width: 82
+                        height: 34
+                        visible: window.operationBusy && !window.operationPaused
+                        text: "إيقاف مؤقت"
+                        onClicked: appController.pauseTransfer()
+
+                        background: Rectangle {
+                            radius: 10
+                            color: parent.pressed ? "#59451F"
+                                   : parent.hovered ? "#3C321F"
+                                   : "#282519"
+                            border.width: 1
+                            border.color: "#80662B"
+                        }
+
+                        contentItem: Text {
+                            text: parent.text
+                            color: "#FFE19A"
+                            font.pixelSize: 11
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+
+                    Button {
+                        width: 82
+                        height: 34
+                        visible: window.operationBusy && window.operationPaused
+                        text: "استئناف"
+                        onClicked: appController.resumeTransfer()
+
+                        background: Rectangle {
+                            radius: 10
+                            color: parent.pressed ? "#1C6B4A"
+                                   : parent.hovered ? "#184D3A"
+                                   : "#153629"
+                            border.width: 1
+                            border.color: "#287A58"
+                        }
+
+                        contentItem: Text {
+                            text: parent.text
+                            color: "#9BF0C5"
+                            font.pixelSize: 11
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
 
                     Button {
                         width: 104
@@ -1156,15 +1215,18 @@ ApplicationWindow {
 
             Text {
                 width: parent.width
+                height: 34
                 text: window.operationMessage
                 color: "#B9C3D2"
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 maximumLineCount: 2
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
 
             ListView {
                 width: parent.width
-                height: parent.height - 62
+                height: parent.height - 104
                 clip: true
                 spacing: 8
                 model: window.transferDevices
@@ -1176,7 +1238,7 @@ ApplicationWindow {
 
                 delegate: Rectangle {
                     width: ListView.view.width
-                    height: 148
+                    height: 200
                     radius: 12
                     color: "#181F2B"
                     border.width: 1
