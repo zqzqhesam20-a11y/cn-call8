@@ -35,7 +35,7 @@ rem Preflight QtWidgets and construct QApplication using Qt's offscreen plugin.
 rem This tests the native Qt DLL/plugin load before starting the desktop UI.
 set "KAFIANET_OLD_QT_QPA_PLATFORM=%QT_QPA_PLATFORM%"
 set "QT_QPA_PLATFORM=offscreen"
-"%PYTHON_EXE%" "%APP_ROOT%app_qml.py" --qt-import-smoke-test
+"%PYTHON_EXE%" "%APP_ROOT%kafianet_external_runtime.py" --qt-import-smoke-test
 set "QT_SMOKE_EXIT=%ERRORLEVEL%"
 if defined KAFIANET_OLD_QT_QPA_PLATFORM (
     set "QT_QPA_PLATFORM=%KAFIANET_OLD_QT_QPA_PLATFORM%"
@@ -61,7 +61,7 @@ if errorlevel 1 (
     exit /b 13
 )
 
-"%PYTHON_EXE%" "%APP_ROOT%app_qml.py"
+"%PYTHON_EXE%" "%APP_ROOT%kafianet_external_runtime.py"
 set "APP_EXIT_CODE=%ERRORLEVEL%"
 popd
 
