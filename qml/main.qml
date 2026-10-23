@@ -45,6 +45,8 @@ ApplicationWindow {
     property var transferDevices: []
     property bool transferPanelDismissed: false
     property string operationMessage: ""
+    property string deviceCopyHelpTitle: "إرشادات إصلاح النسخ"
+    property string deviceCopyHelpText: ""
 
 
     // =============================================================
@@ -1238,7 +1240,7 @@ ApplicationWindow {
 
                 delegate: Rectangle {
                     width: ListView.view.width
-                    height: 200
+                    height: 244
                     radius: 12
                     color: "#181F2B"
                     border.width: 1
@@ -1335,7 +1337,42 @@ ApplicationWindow {
                             text: modelData.error
                             color: "#FF8C8C"
                             font.pixelSize: 10
+                            wrapMode: Text.Wrap
+                            maximumLineCount: 2
                             elide: Text.ElideRight
+                        }
+
+                        Button {
+                            visible: modelData.status === "فشل"
+                                     && modelData.kind === "copy"
+                            width: 144
+                            height: 28
+                            text: "إرشادات الإصلاح"
+                            onClicked: {
+                                window.deviceCopyHelpTitle =
+                                    "إصلاح النسخ — " + modelData.model
+                                window.deviceCopyHelpText =
+                                    appController.deviceCopyHelp(modelData.serial)
+                                deviceCopyHelpDialog.open()
+                            }
+
+                            background: Rectangle {
+                                radius: 8
+                                color: parent.pressed ? "#194D5B"
+                                       : parent.hovered ? "#153846"
+                                       : "#122B35"
+                                border.width: 1
+                                border.color: "#26768A"
+                            }
+
+                            contentItem: Text {
+                                text: parent.text
+                                color: "#9CEBFA"
+                                font.pixelSize: 11
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
                         }
 
                         Button {
@@ -1370,6 +1407,40 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    Dialog {
+        id: deviceCopyHelpDialog
+        modal: true
+        focus: true
+        title: window.deviceCopyHelpTitle
+        width: Math.min(660, window.width - 40)
+        height: Math.min(540, window.height - 40)
+        x: Math.max(20, (window.width - width) / 2)
+        y: Math.max(20, (window.height - height) / 2)
+        standardButtons: Dialog.Ok
+
+        background: Rectangle {
+            color: "#111722"
+            radius: 14
+            border.width: 1
+            border.color: "#26768A"
+        }
+
+        contentItem: ScrollView {
+            clip: true
+
+            Text {
+                width: deviceCopyHelpDialog.width - 72
+                text: window.deviceCopyHelpText
+                color: "#DCE4F0"
+                font.pixelSize: 13
+                wrapMode: Text.Wrap
+                padding: 10
+                textFormat: Text.PlainText
+                selectByMouse: true
             }
         }
     }
