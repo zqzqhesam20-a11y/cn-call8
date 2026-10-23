@@ -13,9 +13,13 @@ $sitePackages = Join-Path -Path $libRoot -ChildPath "site-packages"
 $bootstrap = Join-Path -Path $appRoot -ChildPath "kafianet_external_runtime.py"
 
 function Stop-KafiaLauncher([int]$Code, [string]$Message) {
-    Write-Host ""
-    Write-Host "[KAFIA NET CONTROL PRO] $Message"
-    try { Read-Host "Press Enter to close" | Out-Null } catch {}
+    $fullMessage = "[KAFIA NET CONTROL PRO] $Message"
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        [void]$shell.Popup($fullMessage, 0, "KAFIA NET CONTROL PRO", 16)
+    } catch {
+        Write-Host $fullMessage
+    }
     exit $Code
 }
 
@@ -65,12 +69,12 @@ if ($smokeExitCode -ne 0) {
     Stop-KafiaLauncher 12 "Qt startup preflight failed. Check compatible PySide6, Qt DLLs and plugins in the external Python environment."
 }
 
-Push-Location -LiteralPath $appRoot
 try {
-    & $pythonExe $bootstrap
-    $appExitCode = $LASTEXITCODE
-} finally {
-    Pop-Location
+    $quotedBootstrap = '"' + $bootstrap + '"'
+    $appProcess = Start-Process -FilePath $pythonExe -ArgumentList $quotedBootstrap -WorkingDirectory $appRoot -WindowStyle Hidden -PassThru -Wait
+    $appExitCode = $appProcess.ExitCode
+} catch {
+    Stop-KafiaLauncher 14 ("Unable to launch the application: " + $_.Exception.Message)
 }
 if ($appExitCode -ne 0) {
     Stop-KafiaLauncher $appExitCode "The application exited with an error."
