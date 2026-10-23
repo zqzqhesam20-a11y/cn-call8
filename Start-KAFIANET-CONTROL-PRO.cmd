@@ -27,6 +27,7 @@ if not exist "%PYTHON_ROOT%\Lib" (
 
 rem Prefer DLLs shipped with the external runtime and the PySide6 package.
 set "PATH=%PYTHON_ROOT%;%PYTHON_ROOT%\DLLs;%SITE_PACKAGES%\PySide6;%SITE_PACKAGES%\PySide6\Qt\bin;%SITE_PACKAGES%\shiboken6;%APP_ROOT%platform-tools;%PATH%"
+set "PYTHONHOME=%PYTHON_ROOT%"
 set "PYTHONPATH=%APP_ROOT%;%SITE_PACKAGES%;%PYTHONPATH%"
 set "PYTHONUTF8=1"
 
