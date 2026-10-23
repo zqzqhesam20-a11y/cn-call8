@@ -430,8 +430,8 @@ def test_paths_and_ui():
     # Shipping launchers must avoid CMD codepage corruption for Arabic UNC components.
     launcher = Path("Start-KAFIANET-CONTROL-PRO.cmd").read_text(encoding="utf-8")
     assert all(ord(char) < 128 for char in launcher)
-    assert "Start-KAFIANET-CONTROL-PRO.ps1" in launcher
-    assert "powershell.exe" in launcher
+    assert "Launch-KAFIA-NET-CONTROL-PRO.vbs" in launcher
+    assert "wscript.exe" in launcher
     hidden_launcher = Path("Launch-KAFIA-NET-CONTROL-PRO.vbs").read_text(encoding="utf-8")
     assert all(ord(char) < 128 for char in hidden_launcher)
     assert "Start-KAFIANET-CONTROL-PRO.ps1" in hidden_launcher
