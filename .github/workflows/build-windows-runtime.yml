@@ -56,6 +56,17 @@ jobs:
             throw "Packaged QtWidgets/QApplication smoke test failed with exit code $LASTEXITCODE."
           }
 
+      - name: Download and verify Microsoft Visual C++ runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path redist | Out-Null
+          Invoke-WebRequest -Uri "https://aka.ms/vc14/vc_redist.x64.exe" -OutFile "redist\vc_redist.x64.exe" -TimeoutSec 90
+          $signature = Get-AuthenticodeSignature "redist\vc_redist.x64.exe"
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Microsoft") {
+            throw "Microsoft Visual C++ Redistributable signature validation failed."
+          }
+
       - name: Install Inno Setup
         shell: pwsh
         run: |
@@ -83,13 +94,23 @@ jobs:
 
           [Files]
           Source: "dist\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+          Source: "redist\vc_redist.x64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
           [Icons]
           Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
           Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
 
           [Run]
+          Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Flags: waituntilterminated
           Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+
+          [Code]
+          function IsVCRedistInstalled(): Boolean;
+          var
+            Installed: Cardinal;
+          begin
+            Result := RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) and (Installed = 1);
+          end;
           '@ | Set-Content -Path installer.iss -Encoding UTF8
 
       - name: Build installer
