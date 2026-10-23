@@ -62,10 +62,10 @@ jobs:
               -not $hiddenLauncher.Contains('shell.Run(command, 0, True)')) {
             throw "The VBS launcher must run PowerShell invisibly and wait for the GUI app."
           }
-          if (-not $powershellLauncher.Contains('Start-Process') -or
-              -not $powershellLauncher.Contains('-WindowStyle Hidden') -or
+          if (-not $powershellLauncher.Contains('& $pythonExe $bootstrap') -or
+              $powershellLauncher.Contains('Start-Process -FilePath $pythonExe') -or
               -not $powershellLauncher.Contains('WScript.Shell')) {
-            throw "The external Python app must launch without a console window and report errors in a dialog."
+            throw "PowerShell must run the GUI app in the already-hidden VBS host without hiding the Qt window."
           }
           if (-not $powershellLauncher.Contains('SERVER06\c$') -or
               -not $powershellLauncher.Contains('0x0639') -or
