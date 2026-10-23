@@ -568,8 +568,8 @@ class ADBEngine(QObject):
                 return
 
             # The destination is the exact root for the source contents.
-            # Directory contents are expanded as source/* below, so do not
-            # append a synthetic "/." path that ADB may normalize as a folder.
+            # Explicit child source arguments avoid ADB appending the source
+            # directory name under an already-created destination.
             destination = destination.rstrip("/")
 
             # --------------------------------------------------------
