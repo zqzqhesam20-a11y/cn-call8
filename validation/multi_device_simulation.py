@@ -386,6 +386,12 @@ def test_paths_and_ui():
     assert "PYTHON_EXE=%PYTHON_ROOT%\\python.exe" in launcher
     assert 'PYTHONHOME=%PYTHON_ROOT%' in launcher
     assert "--qt-import-smoke-test" in launcher
+    assert "kafianet_external_runtime.py" in launcher
+    bootstrap = Path("kafianet_external_runtime.py").read_text(encoding="utf-8")
+    assert runtime_root in bootstrap
+    assert "os.add_dll_directory" in bootstrap
+    assert "QT_QPA_PLATFORM_PLUGIN_PATH" in bootstrap
+    assert "runpy.run_path" in bootstrap
     assert "from PySide6.QtWidgets import QApplication" in current
     assert "QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS" in current
     assert "pyside_parts < (6, 10, 1)" in current
