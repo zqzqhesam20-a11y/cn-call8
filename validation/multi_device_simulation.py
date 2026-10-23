@@ -197,6 +197,7 @@ def test_failure_cancel_and_completion_isolation(controller):
     assert controller._active_operations["SERIAL_B"]["status"] == "اكتمل"
     assert controller._active_operations["SERIAL_C"]["status"] == "اكتمل"
     assert not controller.operationBusy
+    assert controller._operation_state == "IDLE"
 
 
 def test_install_operations(controller):
@@ -344,6 +345,35 @@ def test_paths_and_ui():
     assert "model: window.transferDevices" in qml
     assert "onClicked: appController.cancelDevice" in qml
     assert "TransferWindow()" not in current
+
+    # Regression checks for the repaired lifecycle and physical source paths.
+    assert 'return Path(r"D:\\games")' in current
+    assert "source = build_usb_source_root()" in current
+    assert "if not source.is_dir():" in current
+    assert "self.adbDiscoveryCompleted.connect(self._apply_adb_devices)" in current
+    assert "def refreshADBDevices(self):" in current
+    assert "active = any(" in current
+    launch = current[current.index("def launchGame(self, game_name):"):]
+    launch = launch[:launch.index("package_id = ADB_PACKAGE_IDS.get(")]
+    assert "self.adb_engine.get_devices()" not in launch
+    assert "يرجى تحديد هاتف واحد على الأقل قبل تشغيل اللعبة." in launch
+
+    # Protect against ADB stderr pipe deadlocks and false 100% completion.
+    wait_start = engine_source.index("def _push_thread")
+    stderr_start = engine_source.index("stderr_reader.start()", wait_start)
+    wait_call = engine_source.index("return_code = process.wait()", wait_start)
+    assert stderr_start < wait_call
+    assert "stderr_reader.join(timeout=2.0)" in engine_source
+    assert "min(percent, 99)" in engine_source
+    assert "time.time_ns()" in engine_source
+    assert engine_source.index(
+        'local_adb = BASE_DIR / "platform-tools" / "adb.exe"'
+    ) < engine_source.index('external_adb = Path(')
+
+    assert "appController.refreshADBDevices()" in qml
+    assert "appController.getADBDevices()" not in qml
+    assert "if (appController.useWirelessSource())" in qml
+    assert "if (appController.useUsbSource())" in qml
 
 
 def run_once():
