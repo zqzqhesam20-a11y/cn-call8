@@ -503,7 +503,9 @@ def test_paths_and_ui():
     wait_call = engine_source.index("return_code = process.wait()", wait_start)
     assert stderr_start < wait_call
     assert "stderr_reader.join(timeout=2.0)" in engine_source
-    assert "min(percent, 99)" in engine_source
+    assert "def _combined_progress_percent(" in engine_source
+    assert "min(int(transferred * 100 / total_bytes), 99)" in engine_source
+    assert "self._combined_progress_percent(" in engine_source
     assert "time.time_ns()" in engine_source
     assert engine_source.index(
         'local_adb = BASE_DIR / "platform-tools" / "adb.exe"'
