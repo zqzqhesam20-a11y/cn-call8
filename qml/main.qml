@@ -622,14 +622,11 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
 
                                 onClicked: {
-
-                                    window.wirelessConnected = true
-                                    window.usbReady = false
-
-                                    if (window.wirelessConnected) {
-                                        appController.useWirelessSource()
+                                    if (appController.useWirelessSource()) {
+                                        window.wirelessConnected = true
+                                        window.usbReady = false
+                                        window.activeSource = "WIRELESS"
                                     }
-
                                 }
 
                             }
@@ -728,14 +725,11 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
 
                                 onClicked: {
-
-                                    window.usbReady = true
-                                     window.wirelessConnected = false
-
-                                    if (window.usbReady) {
-                                        appController.useUsbSource()
+                                    if (appController.useUsbSource()) {
+                                        window.usbReady = true
+                                        window.wirelessConnected = false
+                                        window.activeSource = "USB"
                                     }
-
                                 }
 
                             }
@@ -827,7 +821,7 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
 
                                 onClicked: {
-                                    appController.getADBDevices()
+                                    appController.refreshADBDevices()
                                     adbDevicePopup.open()
                                 }
 
@@ -877,7 +871,7 @@ ApplicationWindow {
                                 onClicked: {
 
                                     console.log("REFRESH")
-                                    appController.getADBDevices()
+                                    appController.refreshADBDevices()
                                     adbDevicePopup.open()
 
                                 }
@@ -966,7 +960,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         if (appController && appController.getADBDevices) {
-            appController.getADBDevices()
+            appController.refreshADBDevices()
         }
     }
 
