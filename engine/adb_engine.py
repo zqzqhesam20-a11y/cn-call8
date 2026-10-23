@@ -116,6 +116,7 @@ class ADBEngine(QObject):
         self._process_lock = threading.Lock()
         self._process_paused = False
         self._reconnect_retry_count = 0
+        self._progress_offset_bytes = 0
         self._cancelled_by_user = False
 
     def _get_adb_path(self):
@@ -517,6 +518,21 @@ class ADBEngine(QObject):
             )
             return None
 
+    @staticmethod
+    def _adb_source_argument(source_path):
+        """Push directory contents, not the root directory as a child."""
+        if source_path.is_dir():
+            return str(source_path / "*")
+        return str(source_path)
+
+    @staticmethod
+    def _combined_progress_percent(total_bytes, offset_bytes, attempt_bytes):
+        """Return monotonic overall progress across reconnect retries."""
+        if total_bytes <= 0:
+            return 0
+        transferred = min(max(offset_bytes + attempt_bytes, 0), total_bytes)
+        return max(0, min(int(transferred * 100 / total_bytes), 99))
+
     def _push_thread(
         self,
         device,
@@ -545,17 +561,17 @@ class ADBEngine(QObject):
 
                 return
 
-            # Treat the configured destination as the exact root
-            # of the copy. The trailing "/." prevents adb from
-            # introducing the source directory name underneath it.
-            destination = destination.rstrip("/") + "/."
+            # The destination is the exact root for the source contents.
+            # Directory contents are expanded as source/* below, so do not
+            # append a synthetic "/." path that ADB may normalize as a folder.
+            destination = destination.rstrip("/")
 
             # --------------------------------------------------------
             # --------------------------------------------------------
             # PRE-FLIGHT DESTINATION WRITE CHECK
             # Direct ADB shell commands only.
             # --------------------------------------------------------
-            check_path = destination.rstrip('/.') or destination
+            check_path = destination.rstrip('/') or destination
             check_file = (
                 check_path.rstrip('/')
                 + f'/.cncall_write_test_{os.getpid()}_'
@@ -690,6 +706,20 @@ class ADBEngine(QObject):
                 else source_path.stat().st_size
             )
 
+            progress_offset_bytes = min(
+                self._progress_offset_bytes,
+                total_bytes
+            )
+
+            if source_path.is_dir() and next(source_path.iterdir(), None) is None:
+                self.progressChanged.emit(100, "0 B/s", "00:00")
+                self.statusChanged.emit("اكتمل النسخ")
+                self.finished.emit(True, "المصدر فارغ؛ تم تجهيز مجلد الوجهة")
+                return
+
+            adb_source = self._adb_source_argument(source_path)
+            print("ADB SOURCE ARGUMENT:", adb_source)
+
             print()
             print("========================================")
             print("ADB FAST TRANSFER ENGINE")
@@ -707,7 +737,7 @@ class ADBEngine(QObject):
                 device,
                 "push",
                 "--sync",
-                requested_source,
+                adb_source,
                 destination
             ]
 
@@ -842,26 +872,17 @@ class ADBEngine(QObject):
                 progress_state["speed"] = speed
 
                 transferred_bytes = min(
-                    progress_state["bytes"],
+                    progress_offset_bytes
+                    + progress_state["bytes"],
                     total_bytes
                 )
 
-                if total_bytes > 0:
-
-                    percent = int(
-                        transferred_bytes
-                        * 100
-                        / total_bytes
-                    )
-
-                else:
-
-                    percent = 0
-
                 # Keep 100% reserved for successful ADB completion.
-                percent = max(
-                    0,
-                    min(percent, 99)
+                # The offset carries completed transfer work across reconnects.
+                percent = self._combined_progress_percent(
+                    total_bytes,
+                    progress_offset_bytes,
+                    progress_state["bytes"]
                 )
 
                 if (
@@ -1084,6 +1105,20 @@ class ADBEngine(QObject):
             )
             device_connected = self._device_is_connected(device)
             if not device_connected or looks_disconnected:
+                # Preserve the completed/attempted byte estimate before starting
+                # a new adb process. --sync skips files already present on-device,
+                # but each new process has fresh local I/O counters.
+                self._progress_offset_bytes = min(
+                    total_bytes,
+                    progress_offset_bytes + progress_state["bytes"]
+                )
+                print(
+                    "ADB PROGRESS OFFSET PRESERVED:",
+                    self._format_size(self._progress_offset_bytes),
+                    "/",
+                    self._format_size(total_bytes)
+                )
+
                 self.statusChanged.emit(
                     "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..."
                 )
@@ -1157,6 +1192,7 @@ class ADBEngine(QObject):
         self._pause_event.set()
         self._process_paused = False
         self._reconnect_retry_count = 0
+        self._progress_offset_bytes = 0
 
         self._cancel_event.clear()
         self._cancelled_by_user = False
