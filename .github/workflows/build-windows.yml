@@ -1,6 +1,13 @@
 name: Build Windows EXE
 
 on:
+  push:
+    branches:
+      - main
+      - "fix/**"
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -25,8 +32,18 @@ jobs:
           }
           pip install pyinstaller
 
-      - name: Build EXE
+      - name: Run regression simulation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
+          $ErrorActionPreference = "Stop"
+          python validation\multi_device_simulation.py
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
           python -m PyInstaller --clean --noconfirm KAFIA_NET_CONTROL_PRO.spec
 
       - name: Install Inno Setup
@@ -56,7 +73,7 @@ jobs:
 
           [Icons]
           Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
-          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA NET CONTROL PRO.exe"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
 
           [Run]
           Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
