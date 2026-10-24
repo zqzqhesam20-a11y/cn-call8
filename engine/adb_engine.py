@@ -117,6 +117,7 @@ class ADBEngine(QObject):
         self._process_paused = False
         self._reconnect_retry_count = 0
         self._progress_offset_bytes = 0
+        self._progress_offset_percent = 0
         self._cancelled_by_user = False
 
     def _get_adb_path(self):
@@ -794,6 +795,10 @@ class ADBEngine(QObject):
                 self._progress_offset_bytes,
                 total_bytes
             )
+            progress_offset_percent = max(
+                0,
+                min(int(self._progress_offset_percent), 99)
+            )
 
             if source_path.is_dir() and next(source_path.iterdir(), None) is None:
                 self.progressChanged.emit(100, "0 B/s", "00:00")
@@ -883,7 +888,7 @@ class ADBEngine(QObject):
                 "speed_samples": [],
                 "native_seen": False,
                 "native_percent": 0,
-                "native_bytes": 0,
+                "native_display_percent": progress_offset_percent,
                 "native_speed_seen": False,
                 "current_file_path": "",
                 "current_file_percent": 0,
@@ -893,15 +898,9 @@ class ADBEngine(QObject):
 
             def progress_snapshot_locked():
                 if progress_state["native_seen"]:
-                    transferred_bytes = min(
-                        progress_offset_bytes + progress_state["native_bytes"],
-                        total_bytes
-                    )
-                    percent = self._combined_progress_percent(
-                        total_bytes,
-                        progress_offset_bytes,
-                        progress_state["native_bytes"]
-                    )
+                    # Native ADB percent already excludes files skipped by --sync.
+                    percent = progress_state["native_display_percent"]
+                    transferred_bytes = int(total_bytes * percent / 100)
                 else:
                     transferred_bytes = min(
                         progress_offset_bytes + progress_state["bytes"],
@@ -916,12 +915,23 @@ class ADBEngine(QObject):
                 percent = max(progress_state["last_percent"], percent)
                 progress_state["last_percent"] = percent
                 speed = progress_state["speed"]
-                remaining_bytes = max(total_bytes - transferred_bytes, 0)
-                eta = (
-                    self._format_time(remaining_bytes / speed)
-                    if speed > 0
-                    else "--"
-                )
+                if progress_state["native_seen"]:
+                    elapsed = max(time.monotonic() - start_time, 0.001)
+                    remaining_seconds = (
+                        elapsed * max(100 - percent, 0) / max(percent, 1)
+                    )
+                    eta = (
+                        self._format_time(remaining_seconds)
+                        if 0 < percent < 100
+                        else "--"
+                    )
+                else:
+                    remaining_bytes = max(total_bytes - transferred_bytes, 0)
+                    eta = (
+                        self._format_time(remaining_bytes / speed)
+                        if speed > 0
+                        else "--"
+                    )
                 speed_text = (
                     self._format_size(speed) + "/s"
                     if speed > 0
@@ -961,14 +971,14 @@ class ADBEngine(QObject):
                         progress_state["native_percent"] = max(
                             progress_state["native_percent"], overall_percent
                         )
-                        remaining_capacity = max(
-                            total_bytes - progress_offset_bytes, 0
+                        offset_percent = progress_offset_percent
+                        attempt_percent = progress_state["native_percent"]
+                        combined_percent = offset_percent + (
+                            (100 - offset_percent) * attempt_percent / 100.0
                         )
-                        native_bytes = int(
-                            remaining_capacity * progress_state["native_percent"] / 100
-                        )
-                        progress_state["native_bytes"] = max(
-                            progress_state["native_bytes"], native_bytes
+                        progress_state["native_display_percent"] = max(
+                            progress_state["native_display_percent"],
+                            max(0, min(int(combined_percent), 99))
                         )
 
                     samples = progress_state["speed_samples"]
@@ -1228,15 +1238,16 @@ class ADBEngine(QObject):
                 # Preserve the completed/attempted byte estimate before starting
                 # a new adb process. --sync skips files already present on-device,
                 # but each new process has fresh local I/O counters.
-                attempt_progress_bytes = (
-                    progress_state["native_bytes"]
-                    if progress_state["native_seen"]
-                    else progress_state["bytes"]
-                )
-                self._progress_offset_bytes = min(
-                    total_bytes,
-                    progress_offset_bytes + attempt_progress_bytes
-                )
+                if progress_state["native_seen"]:
+                    self._progress_offset_percent = max(
+                        self._progress_offset_percent,
+                        progress_state["native_display_percent"]
+                    )
+                else:
+                    self._progress_offset_bytes = min(
+                        total_bytes,
+                        progress_offset_bytes + progress_state["bytes"]
+                    )
                 print(
                     "ADB PROGRESS OFFSET PRESERVED:",
                     self._format_size(self._progress_offset_bytes),
@@ -1318,6 +1329,7 @@ class ADBEngine(QObject):
         self._process_paused = False
         self._reconnect_retry_count = 0
         self._progress_offset_bytes = 0
+        self._progress_offset_percent = 0
 
         self._cancel_event.clear()
         self._cancelled_by_user = False
