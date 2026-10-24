@@ -234,6 +234,27 @@ def test_adb_source_arguments_and_progress_offset():
     assert ADBEngine._combined_progress_percent(1000, 1000, 0) == 99
     assert ADBEngine._combined_progress_percent(0, 0, 0) == 0
 
+    # Current ADB writes native progress rows to stdout for non-console runs.
+    parsed = ADBEngine._parse_adb_progress_details(
+        "[ 42%] C:\\games\\asset.pak: 65%"
+    )
+    assert parsed == (42, r"C:\games\\asset.pak".replace("\\\\", "\\"), 65)
+    single = ADBEngine._parse_adb_progress_details(
+        "[ 7%] C:\\games\\single.pak"
+    )
+    assert single == (7, r"C:\games\\single.pak".replace("\\\\", "\\"), 7)
+    assert ADBEngine._parse_adb_progress_details(
+        "\\x1b[2K[ 7%] asset.pak"
+    ) == (7, "asset.pak", 7)
+    assert ADBEngine._parse_adb_progress_details("Transfer started") == (
+        None, None, None
+    )
+    measured_speed = ADBEngine._parse_adb_transfer_speed(
+        "1 file pushed, 0 skipped. 10.0 MB/s (1048576 bytes in 0.100s)"
+    )
+    assert measured_speed is not None
+    assert abs(measured_speed - 10485760) < 1
+
 
 def test_failure_cancel_and_completion_isolation(controller):
     for serial in ("SERIAL_A", "SERIAL_B", "SERIAL_C"):
@@ -507,9 +528,17 @@ def test_paths_and_ui():
     # Protect against ADB stderr pipe deadlocks and false 100% completion.
     wait_start = engine_source.index("def _push_thread")
     stderr_start = engine_source.index("stderr_reader.start()", wait_start)
+    stdout_start = engine_source.index("stdout_reader.start()", wait_start)
     wait_call = engine_source.index("return_code = process.wait()", wait_start)
     assert stderr_start < wait_call
+    assert stdout_start < wait_call
     assert "stderr_reader.join(timeout=2.0)" in engine_source
+    assert "stdout_reader.join(timeout=2.0)" in engine_source
+    assert "stdout=subprocess.PIPE" in engine_source[wait_start:]
+    assert 'args=(process.stdout, stdout_chunks, "stdout")' in engine_source
+    assert "def _parse_adb_progress_details(line)" in engine_source
+    assert "self._parse_adb_progress_details(line)" in engine_source
+    assert "def _parse_adb_transfer_speed(line)" in engine_source
     assert "def _combined_progress_percent(" in engine_source
     assert "min(int(transferred * 100 / total_bytes), 99)" in engine_source
     assert "self._combined_progress_percent(" in engine_source
