@@ -1230,9 +1230,14 @@ class ADBEngine(QObject):
                 # Preserve the completed/attempted byte estimate before starting
                 # a new adb process. --sync skips files already present on-device,
                 # but each new process has fresh local I/O counters.
+                attempt_progress_bytes = (
+                    progress_state["native_bytes"]
+                    if progress_state["native_seen"]
+                    else progress_state["bytes"]
+                )
                 self._progress_offset_bytes = min(
                     total_bytes,
-                    progress_offset_bytes + progress_state["bytes"]
+                    progress_offset_bytes + attempt_progress_bytes
                 )
                 print(
                     "ADB PROGRESS OFFSET PRESERVED:",
