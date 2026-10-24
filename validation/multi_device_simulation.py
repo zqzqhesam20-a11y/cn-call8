@@ -241,13 +241,13 @@ def test_adb_source_arguments_and_progress_offset():
         "[ 42%] C:\\games\\asset.pak: 65%"
     )
     assert progress_details == (
-        42, r"C:\\games\\asset.pak", 65
+        42, r"C:\games\asset.pak", 65
     )
     single_file_details = ADBEngine._parse_adb_progress_details(
         "[ 7%] C:\\games\\single.pak"
     )
     assert single_file_details == (
-        7, r"C:\\games\\single.pak", 7
+        7, r"C:\games\single.pak", 7
     )
     assert ADBEngine._parse_adb_progress_percent(
         "\x1b[2K[ 7%] asset.pak"
