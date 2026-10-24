@@ -240,7 +240,7 @@ def test_adb_source_arguments_and_progress_offset():
         "[ 42%] C:\\games\\asset.pak: 65%"
     ) == 42
     assert ADBEngine._parse_adb_progress_percent(
-        "\\x1b[2K[ 7%] asset.pak"
+        "\x1b[2K[ 7%] asset.pak"
     ) == 7
     assert ADBEngine._parse_adb_progress_percent(
         "42% 12.3MB/s"
@@ -506,7 +506,7 @@ def test_paths_and_ui():
 
     # Regression checks for the repaired lifecycle and physical source paths.
     assert 'return Path(r"D:\\games")' in current
-    assert str(app_qml.build_usb_source_root()) == r"D:\\games"
+    assert str(app_qml.build_usb_source_root()) == r"D:\games"
     assert "source = build_usb_source_root()" in current
     assert "if not source.is_dir():" in current
     assert "self.adbDiscoveryCompleted.connect(self._apply_adb_devices)" in current
