@@ -859,7 +859,7 @@ class ADBEngine(QObject):
 
             process = subprocess.Popen(
                 command,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
                 startupinfo=startupinfo,
@@ -868,31 +868,180 @@ class ADBEngine(QObject):
                 )
             )
 
-            # Drain stderr while ADB is running. Waiting for the process before
-            # reading a PIPE can deadlock if the child fills the OS pipe buffer.
+            # ADB writes its live transfer progress to stdout when stdout is
+            # redirected (the normal case for this hidden GUI). Keep both streams
+            # captured and parsed, so neither LAN nor local HDD loses progress.
+            stdout_chunks = []
             stderr_chunks = []
+            progress_stop = threading.Event()
+            progress_lock = threading.Lock()
+            start_time = time.monotonic()
+            progress_state = {
+                "bytes": 0,
+                "speed": 0.0,
+                "last_percent": -1,
+                "speed_samples": [],
+                "native_seen": False,
+                "native_percent": 0,
+                "native_bytes": 0,
+                "native_speed_seen": False,
+                "current_file_path": "",
+                "current_file_percent": 0,
+                "current_file_time": start_time,
+                "file_size_cache": {},
+            }
 
-            def drain_stderr(stream, chunks):
+            def progress_snapshot_locked():
+                if progress_state["native_seen"]:
+                    transferred_bytes = min(
+                        progress_offset_bytes + progress_state["native_bytes"],
+                        total_bytes
+                    )
+                    percent = self._combined_progress_percent(
+                        total_bytes,
+                        progress_offset_bytes,
+                        progress_state["native_bytes"]
+                    )
+                else:
+                    transferred_bytes = min(
+                        progress_offset_bytes + progress_state["bytes"],
+                        total_bytes
+                    )
+                    percent = self._combined_progress_percent(
+                        total_bytes,
+                        progress_offset_bytes,
+                        progress_state["bytes"]
+                    )
+
+                percent = max(progress_state["last_percent"], percent)
+                progress_state["last_percent"] = percent
+                speed = progress_state["speed"]
+                remaining_bytes = max(total_bytes - transferred_bytes, 0)
+                eta = (
+                    self._format_time(remaining_bytes / speed)
+                    if speed > 0
+                    else "--"
+                )
+                speed_text = (
+                    self._format_size(speed) + "/s"
+                    if speed > 0
+                    else "0 B/s"
+                )
+                return percent, speed_text, eta, transferred_bytes
+
+            def emit_progress():
+                with progress_lock:
+                    percent, speed_text, eta, transferred = progress_snapshot_locked()
+                self.progressChanged.emit(percent, speed_text, eta)
+                print(
+                    "ADB TRANSFER PROGRESS:",
+                    f"{percent}%",
+                    "|",
+                    self._format_size(transferred),
+                    "/",
+                    self._format_size(total_bytes),
+                    "|",
+                    speed_text,
+                    "| ETA:",
+                    eta
+                )
+
+            def report_adb_output_line(line):
+                overall_percent, file_path, file_percent = (
+                    self._parse_adb_progress_details(line)
+                )
+                measured_speed = self._parse_adb_transfer_speed(line)
+                if overall_percent is None and measured_speed is None:
+                    return
+
+                now = time.monotonic()
+                with progress_lock:
+                    if overall_percent is not None:
+                        progress_state["native_seen"] = True
+                        progress_state["native_percent"] = max(
+                            progress_state["native_percent"], overall_percent
+                        )
+                        remaining_capacity = max(
+                            total_bytes - progress_offset_bytes, 0
+                        )
+                        native_bytes = int(
+                            remaining_capacity * progress_state["native_percent"] / 100
+                        )
+                        progress_state["native_bytes"] = max(
+                            progress_state["native_bytes"], native_bytes
+                        )
+
+                    samples = progress_state["speed_samples"]
+                    if measured_speed is not None and measured_speed > 0:
+                        samples.append(measured_speed)
+                        progress_state["native_speed_seen"] = True
+
+                    if file_path and file_percent is not None:
+                        file_key = os.path.normcase(os.path.normpath(file_path))
+                        cache = progress_state["file_size_cache"]
+                        if file_key not in cache:
+                            try:
+                                cache[file_key] = Path(file_path).stat().st_size
+                            except (OSError, ValueError):
+                                cache[file_key] = 0
+                        file_size = cache[file_key]
+
+                        is_new_file = (
+                            file_key != progress_state["current_file_path"]
+                        )
+                        if is_new_file:
+                            progress_state["current_file_path"] = file_key
+                            progress_state["current_file_percent"] = 0
+                            progress_state["current_file_time"] = now
+
+                        previous_percent = progress_state["current_file_percent"]
+                        previous_time = progress_state["current_file_time"]
+                        if (
+                            not is_new_file
+                            and file_size > 0
+                            and file_percent > previous_percent
+                            and now > previous_time
+                        ):
+                            delta_bytes = (
+                                file_size * (file_percent - previous_percent) / 100.0
+                            )
+                            elapsed = max(now - previous_time, 0.001)
+                            file_speed = delta_bytes / elapsed
+                            if file_speed > 0:
+                                samples.append(file_speed)
+                                progress_state["native_speed_seen"] = True
+
+                        if file_percent >= previous_percent:
+                            progress_state["current_file_percent"] = file_percent
+                            progress_state["current_file_time"] = now
+
+                    if len(samples) > 8:
+                        del samples[:-8]
+                    if samples:
+                        progress_state["speed"] = sum(samples) / len(samples)
+
+                emit_progress()
+                print("ADB NATIVE PROGRESS LINE:", line.strip())
+
+            def drain_output(stream, chunks, channel):
                 if stream is None:
                     return
+                pending = ""
                 try:
-                    # BufferedReader.read1() returns currently available
-                    # pipe data instead of waiting to fill the full request.
                     while True:
                         chunk = stream.read1(4096)
                         if not chunk:
                             break
                         chunks.append(chunk)
+                        pending += chunk.decode("utf-8", errors="replace")
+                        fragments = re.split(r"[\\r\\n]+", pending)
+                        pending = fragments.pop()
+                        for fragment in fragments:
+                            report_adb_output_line(fragment)
+                    if pending:
+                        report_adb_output_line(pending)
                 except Exception as exc:
-                    print("ADB STDERR DRAIN WARNING:", exc)
-
-            stderr_reader = threading.Thread(
-                target=drain_stderr,
-                args=(process.stderr, stderr_chunks),
-                name=f"ADB-stderr-{device}",
-                daemon=True
-            )
-            stderr_reader.start()
+                    print(f"ADB {channel.upper()} DRAIN WARNING:", exc)
 
             with self._process_lock:
                 self._current_process = process
@@ -901,182 +1050,62 @@ class ADBEngine(QObject):
             if cancelled:
                 process.terminate()
 
-            start_time = time.monotonic()
+            stdout_reader = threading.Thread(
+                target=drain_output,
+                args=(process.stdout, stdout_chunks, "stdout"),
+                name=f"ADB-stdout-{device}",
+                daemon=True
+            )
+            stderr_reader = threading.Thread(
+                target=drain_output,
+                args=(process.stderr, stderr_chunks, "stderr"),
+                name=f"ADB-stderr-{device}",
+                daemon=True
+            )
+            stdout_reader.start()
+            stderr_reader.start()
 
-            # --------------------------------------------------------
-            # INTERNAL ADB I/O LIVE PROGRESS
-            # --------------------------------------------------------
-
-            progress_stop = threading.Event()
-
-            progress_state = {
-                "bytes": 0,
-                "speed": 0.0,
-                "last_percent": -1,
-                "speed_samples": []
-            }
-
-            def io_progress_callback(
-                io_bytes,
-                io_speed
-            ):
-
+            def io_progress_callback(io_bytes, io_speed):
                 if progress_stop.is_set():
                     return
 
-                delta_bytes = max(
-                    int(io_bytes),
-                    0
-                )
-
-                progress_state["bytes"] += (
-                    delta_bytes
-                )
-
-                # ----------------------------------------------------
-                # SMOOTH LIVE SPEED
-                # Average the latest samples so the displayed speed
-                # and ETA do not jump sharply every 200 ms.
-                # ----------------------------------------------------
-
-                raw_speed = max(
-                    float(io_speed),
-                    0.0
-                )
-
-                samples = progress_state[
-                    "speed_samples"
-                ]
-
-                if raw_speed > 0:
-                    samples.append(raw_speed)
-
-                if len(samples) > 8:
-                    del samples[:-8]
-
-                if samples:
-                    speed = (
-                        sum(samples)
-                        / len(samples)
-                    )
-                else:
-                    speed = 0.0
-
-                progress_state["speed"] = speed
-
-                transferred_bytes = min(
-                    progress_offset_bytes
-                    + progress_state["bytes"],
-                    total_bytes
-                )
-
-                # Keep 100% reserved for successful ADB completion.
-                # The offset carries completed transfer work across reconnects.
-                percent = self._combined_progress_percent(
-                    total_bytes,
-                    progress_offset_bytes,
-                    progress_state["bytes"]
-                )
-
-                if (
-                    speed > 0
-                    and total_bytes > 0
-                ):
-
-                    remaining_bytes = max(
-                        total_bytes
-                        - transferred_bytes,
-                        0
-                    )
-
-                    remaining = (
-                        remaining_bytes
-                        / speed
-                    )
-
-                else:
-
-                    remaining = 0.0
-
-                if (
-                    percent !=
-                    progress_state["last_percent"]
-                    or speed > 0
-                ):
-
-                    progress_state[
-                        "last_percent"
-                    ] = percent
-
-                    speed_text = (
-                        self._format_size(
-                            speed
-                        )
-                        + "/s"
-                        if speed > 0
-                        else "0 B/s"
-                    )
-
-                    eta_text = (
-                        self._format_time(
-                            remaining
-                        )
-                    )
-
-                    self.progressChanged.emit(
-                        percent,
-                        speed_text,
-                        eta_text
-                    )
-
-                    print(
-                        "IO PROGRESS:",
-                        f"{percent}%",
-                        "|",
-                        self._format_size(
-                            transferred_bytes
-                        ),
-                        "/",
-                        self._format_size(
-                            total_bytes
-                        ),
-                        "|",
-                        speed_text,
-                        "| ETA:",
-                        eta_text
-                    )
+                delta_bytes = max(int(io_bytes), 0)
+                raw_speed = max(float(io_speed), 0.0)
+                with progress_lock:
+                    progress_state["bytes"] += delta_bytes
+                    # Process-I/O speed is only a fallback. ADB's file/summary
+                    # measurements take precedence when the tool reports them.
+                    if raw_speed > 0 and not progress_state["native_speed_seen"]:
+                        samples = progress_state["speed_samples"]
+                        samples.append(raw_speed)
+                        if len(samples) > 8:
+                            del samples[:-8]
+                        progress_state["speed"] = sum(samples) / len(samples)
+                emit_progress()
 
             progress_thread = threading.Thread(
                 target=monitor_adb_io,
-                args=(
-                    process.pid,
-                    io_progress_callback,
-                    progress_stop
-                ),
+                args=(process.pid, io_progress_callback, progress_stop),
                 daemon=True
             )
-
             progress_thread.start()
 
-            # --------------------------------------------------------
-            # WAIT FOR THE REAL ADB PROCESS
-            # --------------------------------------------------------
-
+            # Drain both pipes while the real adb.exe process is running.
             return_code = process.wait()
-
             progress_stop.set()
-
-            progress_thread.join(
-                timeout=1.0
-            )
+            progress_thread.join(timeout=1.0)
+            stdout_reader.join(timeout=2.0)
             stderr_reader.join(timeout=2.0)
 
-            # The reader has drained the pipe during execution; joining it
-            # after process exit collects the complete available error text.
-            stderr_text = b"".join(stderr_chunks).decode(
-                "utf-8",
-                errors="ignore"
+            stdout_text = b"".join(stdout_chunks).decode(
+                "utf-8", errors="ignore"
             ).strip()
+            stderr_text = b"".join(stderr_chunks).decode(
+                "utf-8", errors="ignore"
+            ).strip()
+            combined_output = "\\n".join(
+                part for part in (stdout_text, stderr_text) if part
+            )
 
             with self._process_lock:
                 if self._current_process is process:
@@ -1172,17 +1201,17 @@ class ADBEngine(QObject):
                 return_code
             )
 
-            if stderr_text:
+            if combined_output:
 
                 print(
-                    "ADB STDERR:",
-                    stderr_text
+                    "ADB OUTPUT:",
+                    combined_output
                 )
 
             # A disconnected handset often makes adb push exit with a transport error.
             # Wait for the same serial to return, then retry with --sync so files already
             # copied successfully are not needlessly sent again.
-            stderr_lower = (stderr_text or "").lower()
+            stderr_lower = (combined_output or stderr_text or "").lower()
             disconnect_markers = (
                 "device offline",
                 "device not found",
@@ -1253,8 +1282,8 @@ class ADBEngine(QObject):
                 False,
                 (
                     "فشل النسخ عبر ADB: "
-                    + stderr_text
-                    if stderr_text
+                    + (combined_output or stderr_text)
+                    if (combined_output or stderr_text)
                     else "فشل النسخ عبر ADB"
                 )
             )
