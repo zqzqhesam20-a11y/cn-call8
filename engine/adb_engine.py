@@ -582,6 +582,28 @@ class ADBEngine(QObject):
         return max(0, min(int(match.group(1)), 99))
 
     @staticmethod
+    def _parse_adb_progress_details(line):
+        """Return ADB overall percent plus current source file and file percent."""
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(line or "")).strip()
+        overall_percent = ADBEngine._parse_adb_progress_percent(text)
+        if overall_percent is None:
+            return None, None, None
+
+        progress_line = re.match(r"^\[\s*\d{1,3}%\s*\]\s+(.+)$", text)
+        if not progress_line:
+            return overall_percent, None, None
+
+        file_text = progress_line.group(1).strip()
+        current_file = re.match(r"^(.*):\s*(\d{1,3})%\s*$", file_text)
+        if current_file:
+            file_path = current_file.group(1).strip().strip('"')
+            file_percent = max(0, min(int(current_file.group(2)), 100))
+            return overall_percent, file_path, file_percent
+
+        # ADB omits a second percentage when a single file is being pushed.
+        return overall_percent, file_text.strip('"'), overall_percent
+
+    @staticmethod
     def _parse_adb_transfer_speed(line):
         """Parse ADB's completed-file throughput summary when available."""
         text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(line or ""))
@@ -874,11 +896,17 @@ class ADBEngine(QObject):
                 "speed_samples": [],
                 "speed": 0.0,
                 "attempt_percent": 0,
+                "current_file_path": "",
+                "current_file_percent": 0,
+                "current_file_time": start_time,
+                "file_size_cache": {},
             }
             progress_lock = threading.Lock()
 
             def report_progress_line(line):
-                adb_percent = self._parse_adb_progress_percent(line)
+                adb_percent, file_path, file_percent = (
+                    self._parse_adb_progress_details(line)
+                )
                 summary_speed = self._parse_adb_transfer_speed(line)
                 if adb_percent is None and summary_speed is None:
                     return
@@ -898,10 +926,50 @@ class ADBEngine(QObject):
                         )
 
                     samples = progress_state["speed_samples"]
-                    # ADB's summary line contains measured transfer throughput.
-                    # Retain the latest samples between completed-file summaries.
+                    # ADB summarizes the measured throughput when a file finishes.
                     if summary_speed is not None and summary_speed > 0:
                         samples.append(summary_speed)
+
+                    # Between summary lines, estimate throughput from ADB's
+                    # own per-file percentage and the source file's real size.
+                    # This avoids host process I/O counters and excludes skipped
+                    # files from the speed calculation.
+                    if file_path and file_percent is not None:
+                        file_key = os.path.normcase(os.path.normpath(file_path))
+                        file_size_cache = progress_state["file_size_cache"]
+                        if file_key not in file_size_cache:
+                            try:
+                                file_size_cache[file_key] = Path(file_path).stat().st_size
+                            except (OSError, ValueError):
+                                file_size_cache[file_key] = 0
+                        file_size = file_size_cache[file_key]
+
+                        if file_key != progress_state["current_file_path"]:
+                            progress_state["current_file_path"] = file_key
+                            progress_state["current_file_percent"] = 0
+                            progress_state["current_file_time"] = start_time
+
+                        previous_file_percent = progress_state["current_file_percent"]
+                        previous_file_time = progress_state["current_file_time"]
+                        if (
+                            file_size > 0
+                            and file_percent > previous_file_percent
+                            and now > previous_file_time
+                        ):
+                            file_delta_bytes = (
+                                file_size
+                                * (file_percent - previous_file_percent)
+                                / 100.0
+                            )
+                            file_delta_seconds = max(now - previous_file_time, 0.001)
+                            measured_file_speed = file_delta_bytes / file_delta_seconds
+                            if measured_file_speed > 0:
+                                samples.append(measured_file_speed)
+
+                        if file_percent >= previous_file_percent:
+                            progress_state["current_file_percent"] = file_percent
+                            progress_state["current_file_time"] = now
+
                     if len(samples) > 8:
                         del samples[:-8]
                     progress_state["speed"] = (
