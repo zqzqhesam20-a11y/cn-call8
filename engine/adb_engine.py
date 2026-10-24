@@ -386,6 +386,62 @@ class ADBEngine(QObject):
             eta
         )
 
+    @staticmethod
+    def _parse_adb_progress_details(line):
+        """Parse ADB's overall progress line and current local-file progress."""
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(line or "")).strip()
+        overall = re.search(r"^\[\s*(\d{1,3})%\s*\]\s*(.*)$", text)
+        if overall:
+            percent = max(0, min(int(overall.group(1)), 100))
+            remainder = overall.group(2).strip()
+            file_match = re.match(r"^(.*):\s*(\d{1,3})%\s*$", remainder)
+            if file_match:
+                file_path = file_match.group(1).strip().strip('"')
+                file_percent = max(0, min(int(file_match.group(2)), 100))
+                return percent, file_path, file_percent
+            file_path = remainder.strip('"')
+            return percent, (file_path or None), (percent if file_path else None)
+
+        # Compatibility with platform-tools that emit a per-file percent/rate.
+        legacy = re.search(
+            r"(?<!\d)(\d{1,3})%\s+(\d+(?:\.\d+)?)([KMGTP]?B)/s",
+            text,
+            re.IGNORECASE
+        )
+        if legacy:
+            return max(0, min(int(legacy.group(1)), 100)), None, None
+        return None, None, None
+
+    @staticmethod
+    def _parse_adb_transfer_speed(line):
+        """Return measured ADB throughput in bytes/second, when present."""
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(line or ""))
+        transfer = re.search(
+            r"\(\s*(\d+)\s+bytes\s+in\s+(\d+(?:\.\d+)?)s\s*\)",
+            text,
+            re.IGNORECASE
+        )
+        if transfer:
+            seconds = float(transfer.group(2))
+            if seconds > 0:
+                return float(transfer.group(1)) / seconds
+
+        rate = re.search(
+            r"(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB|B)/s\b",
+            text,
+            re.IGNORECASE
+        )
+        if not rate:
+            return None
+        multipliers = {
+            "B": 1,
+            "KB": 1024,
+            "MB": 1024 ** 2,
+            "GB": 1024 ** 3,
+            "TB": 1024 ** 4,
+        }
+        return float(rate.group(1)) * multipliers[rate.group(2).upper()]
+
     def _parse_progress(self, line):
 
         match = re.search(
