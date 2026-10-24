@@ -388,6 +388,14 @@ class ADBEngine(QObject):
         )
 
     @staticmethod
+    def _combined_native_progress_percent(offset_percent, attempt_percent):
+        """Keep native ADB progress monotonic when a disconnected copy retries."""
+        offset = max(0, min(int(offset_percent), 99))
+        attempt = max(0, min(int(attempt_percent), 100))
+        combined = offset + ((100 - offset) * attempt / 100.0)
+        return max(offset, min(int(combined), 99))
+
+    @staticmethod
     def _parse_adb_progress_details(line):
         """Parse ADB's overall progress line and current local-file progress."""
         text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(line or "")).strip()
@@ -971,14 +979,13 @@ class ADBEngine(QObject):
                         progress_state["native_percent"] = max(
                             progress_state["native_percent"], overall_percent
                         )
-                        offset_percent = progress_offset_percent
-                        attempt_percent = progress_state["native_percent"]
-                        combined_percent = offset_percent + (
-                            (100 - offset_percent) * attempt_percent / 100.0
+                        combined_percent = self._combined_native_progress_percent(
+                            progress_offset_percent,
+                            progress_state["native_percent"]
                         )
                         progress_state["native_display_percent"] = max(
                             progress_state["native_display_percent"],
-                            max(0, min(int(combined_percent), 99))
+                            combined_percent
                         )
 
                     samples = progress_state["speed_samples"]
