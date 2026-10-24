@@ -947,7 +947,7 @@ class ADBEngine(QObject):
                         if file_key != progress_state["current_file_path"]:
                             progress_state["current_file_path"] = file_key
                             progress_state["current_file_percent"] = 0
-                            progress_state["current_file_time"] = start_time
+                            progress_state["current_file_time"] = now
 
                         previous_file_percent = progress_state["current_file_percent"]
                         previous_file_time = progress_state["current_file_time"]
