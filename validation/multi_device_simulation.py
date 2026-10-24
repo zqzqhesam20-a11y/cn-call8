@@ -521,9 +521,10 @@ def test_paths_and_ui():
     # Device names must have explicit readable text and selection contrast.
     assert "id: deviceSelectionCheckBox" in qml
     assert "text: deviceSelectionCheckBox.text" in qml
-    assert 'color: "#FFFFFF"' in qml
-    assert 'color: "#DCE4F0"' in qml
-    assert 'color: "#153845"' in qml
+    assert 'deviceSelectionCheckBox.checked' in qml
+    assert '"#FFFFFF"' in qml
+    assert '"#DCE4F0"' in qml
+    assert '? "#153845"' in qml
     assert 'border.color: deviceSelectionCheckBox.checked' in qml
     assert "appController.getADBDevices()" not in qml
     assert "if (appController.useWirelessSource())" in qml
