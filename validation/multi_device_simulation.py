@@ -234,6 +234,26 @@ def test_adb_source_arguments_and_progress_offset():
     assert ADBEngine._combined_progress_percent(1000, 1000, 0) == 99
     assert ADBEngine._combined_progress_percent(0, 0, 0) == 0
 
+    # Progress comes from ADB's real transfer output, not Windows disk-I/O
+    # counters that behave differently for a local drive and a LAN path.
+    assert ADBEngine._parse_adb_progress_percent(
+        "[ 42%] C:\\games\\asset.pak: 65%"
+    ) == 42
+    assert ADBEngine._parse_adb_progress_percent(
+        "\\x1b[2K[ 7%] asset.pak"
+    ) == 7
+    assert ADBEngine._parse_adb_progress_percent(
+        "42% 12.3MB/s"
+    ) == 42
+    assert ADBEngine._parse_adb_progress_percent(
+        "Transfer started"
+    ) is None
+    observed_speed = ADBEngine._parse_adb_transfer_speed(
+        "1 file pushed, 0 skipped. 10.0 MB/s (1048576 bytes in 0.100s)"
+    )
+    assert observed_speed is not None
+    assert abs(observed_speed - 10485760) < 1
+
 
 def test_failure_cancel_and_completion_isolation(controller):
     for serial in ("SERIAL_A", "SERIAL_B", "SERIAL_C"):
@@ -486,6 +506,7 @@ def test_paths_and_ui():
 
     # Regression checks for the repaired lifecycle and physical source paths.
     assert 'return Path(r"D:\\games")' in current
+    assert str(app_qml.build_usb_source_root()) == r"D:\\games"
     assert "source = build_usb_source_root()" in current
     assert "if not source.is_dir():" in current
     assert "self.adbDiscoveryCompleted.connect(self._apply_adb_devices)" in current
@@ -505,6 +526,12 @@ def test_paths_and_ui():
 
     # Protect against ADB stderr pipe deadlocks and false 100% completion.
     wait_start = engine_source.index("def _push_thread")
+    push_method = engine_source[wait_start:engine_source.index("@Slot(str, str, str)", wait_start)]
+    assert "monitor_adb_io(" not in push_method
+    assert "report_progress_line(fragment)" in push_method
+    assert "self._parse_adb_progress_percent(line)" in push_method
+    assert "def _parse_adb_progress_percent(line)" in engine_source
+    assert "def _parse_adb_transfer_speed(line)" in engine_source
     stderr_start = engine_source.index("stderr_reader.start()", wait_start)
     wait_call = engine_source.index("return_code = process.wait()", wait_start)
     assert stderr_start < wait_call
