@@ -1546,11 +1546,69 @@ ApplicationWindow {
                 model: window.adbDevices
 
                 delegate: CheckBox {
+                    id: deviceSelectionCheckBox
                     width: ListView.view.width
+                    height: 42
+                    padding: 8
+                    spacing: 8
                     text: modelData.model + " / " + modelData.serial
                     checked: window.selectedAdbSerials.indexOf(
                                  modelData.serial
                              ) !== -1
+
+                    // Explicit high-contrast text and selection styling:
+                    // the selected device remains readable against the popup.
+                    indicator: Rectangle {
+                        implicitWidth: 20
+                        implicitHeight: 20
+                        x: deviceSelectionCheckBox.leftPadding
+                        y: deviceSelectionCheckBox.height / 2 - height / 2
+                        radius: 5
+                        color: deviceSelectionCheckBox.checked
+                               ? "#00D9FF"
+                               : "#0B111A"
+                        border.width: 1
+                        border.color: deviceSelectionCheckBox.checked
+                                      ? "#00D9FF"
+                                      : "#65748A"
+
+                        Text {
+                            anchors.centerIn: parent
+                            visible: deviceSelectionCheckBox.checked
+                            text: "✓"
+                            color: "#071019"
+                            font.pixelSize: 14
+                            font.bold: true
+                        }
+                    }
+
+                    contentItem: Text {
+                        text: deviceSelectionCheckBox.text
+                        color: deviceSelectionCheckBox.checked
+                               ? "#FFFFFF"
+                               : "#DCE4F0"
+                        font.pixelSize: 12
+                        font.bold: deviceSelectionCheckBox.checked
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: deviceSelectionCheckBox.indicator.width
+                                     + deviceSelectionCheckBox.spacing
+                        rightPadding: 8
+                        elide: Text.ElideRight
+                    }
+
+                    background: Rectangle {
+                        radius: 8
+                        color: deviceSelectionCheckBox.checked
+                               ? "#153845"
+                               : deviceSelectionCheckBox.hovered
+                                 ? "#1A2432"
+                                 : "#141B27"
+                        border.width: 1
+                        border.color: deviceSelectionCheckBox.checked
+                                      ? "#00D9FF"
+                                      : "#2A3546"
+                    }
+
                     onClicked: {
                         var selected = window.selectedAdbSerials.slice()
                         var index = selected.indexOf(modelData.serial)
