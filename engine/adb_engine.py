@@ -1133,11 +1133,9 @@ class ADBEngine(QObject):
                     0.001
                 )
 
-                average_speed = (
-                    total_bytes / elapsed
-                    if total_bytes > 0
-                    else 0
-                )
+                # Use the speed measured by ADB/native file progress. Do not
+                # infer throughput from source size because --sync may skip files.
+                average_speed = progress_state["speed"]
 
                 progress_state["bytes"] = (
                     total_bytes
