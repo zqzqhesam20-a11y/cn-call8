@@ -41,9 +41,132 @@ ApplicationWindow {
     property var adbDevices: []
     property var selectedAdbSerials: []
     property bool operationBusy: false
+    property bool operationPaused: false
     property var transferDevices: []
     property bool transferPanelDismissed: false
+
+    // Stable model: update existing rows in place so progress ticks do not
+    // reset ListView's model or jump the user's scroll position.
+    ListModel {
+        id: transferDevicesModel
+    }
+
+    function syncTransferDeviceModel(devices) {
+        const incomingRows = devices || []
+        const desiredSerials = []
+
+        for (let i = 0; i < incomingRows.length; ++i) {
+            const incoming = incomingRows[i]
+            const serial = String(incoming.serial || "")
+            if (serial.length === 0)
+                continue
+
+            desiredSerials.push(serial)
+            const rowData = {
+                serial: serial,
+                deviceModel: String(incoming.model || "Android"),
+                game: String(incoming.game || ""),
+                kind: String(incoming.kind || ""),
+                status: String(incoming.status || "انتظار"),
+                percent: Number(incoming.percent === undefined ? 0 : incoming.percent),
+                operation: String(incoming.operation || ""),
+                speed: String(incoming.speed || "--"),
+                eta: String(incoming.eta || "--"),
+                error: String(incoming.error || ""),
+                cancelled: Boolean(incoming.cancelled)
+            }
+
+            let rowIndex = -1
+            for (let j = 0; j < transferDevicesModel.count; ++j) {
+                if (transferDevicesModel.get(j).serial === serial) {
+                    rowIndex = j
+                    break
+                }
+            }
+
+            if (rowIndex < 0) {
+                transferDevicesModel.append(rowData)
+            } else {
+                const roleNames = Object.keys(rowData)
+                const existingRow = transferDevicesModel.get(rowIndex)
+                for (let k = 0; k < roleNames.length; ++k) {
+                    const roleName = roleNames[k]
+                    if (existingRow[roleName] !== rowData[roleName]) {
+                        transferDevicesModel.setProperty(
+                            rowIndex, roleName, rowData[roleName]
+                        )
+                    }
+                }
+            }
+        }
+
+        // Remove only devices that are no longer in the controller's snapshot.
+        // Ordinary percentage/speed updates never clear or replace the model.
+        for (let i = transferDevicesModel.count - 1; i >= 0; --i) {
+            const serial = transferDevicesModel.get(i).serial
+            if (desiredSerials.indexOf(serial) < 0)
+                transferDevicesModel.remove(i)
+        }
+    }
     property string operationMessage: ""
+    property string deviceCopyHelpTitle: "إرشادات إصلاح النسخ"
+    property string deviceCopyHelpText: ""
+
+    property var androidDataFallbackQueue: []
+    property bool androidDataFallbackDialogActive: false
+    property string androidDataFallbackSerial: ""
+    property string androidDataFallbackGame: ""
+    property string androidDataFallbackDestination: ""
+    property string androidDataFallbackReason: ""
+
+    function queueAndroidDataFallback(serial, gameName, destination, reason) {
+        const queue = window.androidDataFallbackQueue.slice()
+        queue.push({
+            serial: String(serial || ""),
+            gameName: String(gameName || "اللعبة"),
+            destination: String(destination || "/sdcard/"),
+            reason: String(reason || "")
+        })
+        window.androidDataFallbackQueue = queue
+        window.openNextAndroidDataFallback()
+    }
+
+    function openNextAndroidDataFallback() {
+        if (window.androidDataFallbackDialogActive
+                || window.androidDataFallbackQueue.length === 0)
+            return
+
+        const queue = window.androidDataFallbackQueue.slice()
+        const next = queue.shift()
+        window.androidDataFallbackQueue = queue
+        window.androidDataFallbackSerial = next.serial
+        window.androidDataFallbackGame = next.gameName
+        window.androidDataFallbackDestination = next.destination
+        window.androidDataFallbackReason = next.reason
+        window.androidDataFallbackDialogActive = true
+        androidDataFallbackDialog.open()
+    }
+
+    function finishAndroidDataFallback(useRoot) {
+        const serial = window.androidDataFallbackSerial
+        if (!serial)
+            return
+
+        if (useRoot) {
+            if (!appController.copyToDeviceRoot(serial))
+                appController.declineRootFallback(serial)
+        } else {
+            appController.declineRootFallback(serial)
+        }
+
+        window.androidDataFallbackDialogActive = false
+        androidDataFallbackDialog.close()
+        window.androidDataFallbackSerial = ""
+        window.androidDataFallbackGame = ""
+        window.androidDataFallbackDestination = ""
+        window.androidDataFallbackReason = ""
+        Qt.callLater(window.openNextAndroidDataFallback)
+    }
 
 
     // =============================================================
@@ -622,14 +745,11 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
 
                                 onClicked: {
-
-                                    window.wirelessConnected = true
-                                    window.usbReady = false
-
-                                    if (window.wirelessConnected) {
-                                        appController.useWirelessSource()
+                                    if (appController.useWirelessSource()) {
+                                        window.wirelessConnected = true
+                                        window.usbReady = false
+                                        window.activeSource = "WIRELESS"
                                     }
-
                                 }
 
                             }
@@ -728,14 +848,11 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
 
                                 onClicked: {
-
-                                    window.usbReady = true
-                                     window.wirelessConnected = false
-
-                                    if (window.usbReady) {
-                                        appController.useUsbSource()
+                                    if (appController.useUsbSource()) {
+                                        window.usbReady = true
+                                        window.wirelessConnected = false
+                                        window.activeSource = "USB"
                                     }
-
                                 }
 
                             }
@@ -827,7 +944,7 @@ ApplicationWindow {
                                 cursorShape: Qt.PointingHandCursor
 
                                 onClicked: {
-                                    appController.getADBDevices()
+                                    appController.refreshADBDevices()
                                     adbDevicePopup.open()
                                 }
 
@@ -877,7 +994,7 @@ ApplicationWindow {
                                 onClicked: {
 
                                     console.log("REFRESH")
-                                    appController.getADBDevices()
+                                    appController.refreshADBDevices()
                                     adbDevicePopup.open()
 
                                 }
@@ -966,7 +1083,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         if (appController && appController.getADBDevices) {
-            appController.getADBDevices()
+            appController.refreshADBDevices()
         }
     }
 
@@ -978,6 +1095,10 @@ ApplicationWindow {
     Connections {
 
         target: appController
+
+        function onAndroidDataFallbackRequested(serial, gameName, destination, reason) {
+            window.queueAndroidDataFallback(serial, gameName, destination, reason)
+        }
 
         function onTransferPercentChanged(percent) {
 
@@ -1017,9 +1138,14 @@ ApplicationWindow {
             window.operationBusy = state !== "IDLE"
         }
 
+        function onTransferPausedChanged(paused) {
+            window.operationPaused = paused
+        }
+
         function onTransferBatchChanged(devices) {
-            window.transferDevices = devices
-            if (devices && devices.length > 0)
+            window.transferDevices = devices || []
+            window.syncTransferDeviceModel(window.transferDevices)
+            if (window.transferDevices.length > 0)
                 window.transferPanelDismissed = false
         }
 
@@ -1094,9 +1220,11 @@ ApplicationWindow {
 
                 Text {
                     Layout.fillWidth: true
-                    text: window.operationBusy
-                          ? "العملية قيد التنفيذ"
-                          : "نتيجة العملية"
+                    text: window.operationPaused
+                          ? "النقل متوقف مؤقتًا"
+                          : window.operationBusy
+                            ? "العملية قيد التنفيذ"
+                            : "نتيجة العملية"
                     color: "#00D9FF"
                     font.pixelSize: 16
                     font.bold: true
@@ -1106,6 +1234,58 @@ ApplicationWindow {
                 Row {
                     Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                     spacing: 8
+
+                    Button {
+                        width: 82
+                        height: 34
+                        visible: window.operationBusy && !window.operationPaused
+                        text: "إيقاف مؤقت"
+                        onClicked: appController.pauseTransfer()
+
+                        background: Rectangle {
+                            radius: 10
+                            color: parent.pressed ? "#59451F"
+                                   : parent.hovered ? "#3C321F"
+                                   : "#282519"
+                            border.width: 1
+                            border.color: "#80662B"
+                        }
+
+                        contentItem: Text {
+                            text: parent.text
+                            color: "#FFE19A"
+                            font.pixelSize: 11
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+
+                    Button {
+                        width: 82
+                        height: 34
+                        visible: window.operationBusy && window.operationPaused
+                        text: "استئناف"
+                        onClicked: appController.resumeTransfer()
+
+                        background: Rectangle {
+                            radius: 10
+                            color: parent.pressed ? "#1C6B4A"
+                                   : parent.hovered ? "#184D3A"
+                                   : "#153629"
+                            border.width: 1
+                            border.color: "#287A58"
+                        }
+
+                        contentItem: Text {
+                            text: parent.text
+                            color: "#9BF0C5"
+                            font.pixelSize: 11
+                            font.bold: true
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                    }
 
                     Button {
                         width: 104
@@ -1162,18 +1342,22 @@ ApplicationWindow {
 
             Text {
                 width: parent.width
+                height: 34
                 text: window.operationMessage
                 color: "#B9C3D2"
-                elide: Text.ElideRight
+                wrapMode: Text.Wrap
                 maximumLineCount: 2
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
             }
 
             ListView {
+                id: transferListView
                 width: parent.width
-                height: parent.height - 62
+                height: parent.height - 104
                 clip: true
                 spacing: 8
-                model: window.transferDevices
+                model: transferDevicesModel
 
                 ScrollBar.vertical: ScrollBar {
                     policy: ScrollBar.AsNeeded
@@ -1182,13 +1366,13 @@ ApplicationWindow {
 
                 delegate: Rectangle {
                     width: ListView.view.width
-                    height: 148
+                    height: 244
                     radius: 12
                     color: "#181F2B"
                     border.width: 1
-                    border.color: modelData.status === "فشل"
+                    border.color: status === "فشل"
                                   ? "#A83232"
-                                  : modelData.status === "اكتمل"
+                                  : status === "اكتمل"
                                     ? "#247A58"
                                     : "#29384A"
 
@@ -1199,7 +1383,7 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.model
+                            text: deviceModel
                             color: "white"
                             font.pixelSize: 14
                             font.bold: true
@@ -1208,7 +1392,7 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: "Serial: " + modelData.serial
+                            text: "Serial: " + serial
                             color: "#8F9CAF"
                             font.pixelSize: 11
                             elide: Text.ElideRight
@@ -1216,7 +1400,7 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.game
+                            text: game
                             color: "#DCE4F0"
                             font.pixelSize: 11
                             elide: Text.ElideRight
@@ -1224,10 +1408,10 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: "الحالة: " + modelData.status
-                            color: modelData.status === "فشل"
+                            text: "الحالة: " + status
+                            color: status === "فشل"
                                    ? "#FF7777"
-                                   : modelData.status === "اكتمل"
+                                   : status === "اكتمل"
                                      ? "#42D995"
                                      : "#00D9FF"
                             font.pixelSize: 12
@@ -1241,10 +1425,10 @@ ApplicationWindow {
                             color: "#252C3A"
 
                             Rectangle {
-                                visible: modelData.percent >= 0
+                                visible: percent >= 0
                                 width: parent.width
                                        * Math.max(0, Math.min(
-                                           100, modelData.percent
+                                           100, percent
                                        )) / 100
                                 height: parent.height
                                 radius: 4
@@ -1254,8 +1438,8 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.percent >= 0
-                                  ? modelData.percent + "%"
+                            text: percent >= 0
+                                  ? percent + "%"
                                   : "جارٍ التنفيذ..."
                             color: "#DCE4F0"
                             font.pixelSize: 11
@@ -1263,35 +1447,70 @@ ApplicationWindow {
 
                         Text {
                             width: parent.width
-                            text: modelData.operation
+                            text: operation
                                   + "  |  "
-                                  + modelData.speed
+                                  + speed
                                   + "  |  ETA "
-                                  + modelData.eta
+                                  + eta
                             color: "#AAB6C8"
                             font.pixelSize: 10
                             elide: Text.ElideRight
                         }
 
                         Text {
-                            visible: modelData.error !== ""
+                            visible: error !== ""
                             width: parent.width
-                            text: modelData.error
+                            text: error
                             color: "#FF8C8C"
                             font.pixelSize: 10
+                            wrapMode: Text.Wrap
+                            maximumLineCount: 2
                             elide: Text.ElideRight
                         }
 
                         Button {
+                            visible: status === "فشل"
+                                     && kind === "copy"
+                            width: 144
+                            height: 28
+                            text: "إرشادات الإصلاح"
+                            onClicked: {
+                                window.deviceCopyHelpTitle =
+                                    "إصلاح النسخ — " + deviceModel
+                                window.deviceCopyHelpText =
+                                    appController.deviceCopyHelp(serial)
+                                deviceCopyHelpDialog.open()
+                            }
+
+                            background: Rectangle {
+                                radius: 8
+                                color: parent.pressed ? "#194D5B"
+                                       : parent.hovered ? "#153846"
+                                       : "#122B35"
+                                border.width: 1
+                                border.color: "#26768A"
+                            }
+
+                            contentItem: Text {
+                                text: parent.text
+                                color: "#9CEBFA"
+                                font.pixelSize: 11
+                                font.bold: true
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+
+                        Button {
                             visible: window.operationBusy
-                                     && modelData.status !== "اكتمل"
-                                     && modelData.status !== "فشل"
-                                     && modelData.status !== "ملغي"
+                                     && status !== "اكتمل"
+                                     && status !== "فشل"
+                                     && status !== "ملغي"
                             width: 88
                             height: 30
                             text: "إلغاء"
                             onClicked: appController.cancelDevice(
-                                modelData.serial
+                                serial
                             )
 
                             background: Rectangle {
@@ -1314,6 +1533,128 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    Dialog {
+        id: deviceCopyHelpDialog
+        modal: true
+        focus: true
+        title: window.deviceCopyHelpTitle
+        width: Math.min(660, window.width - 40)
+        height: Math.min(540, window.height - 40)
+        x: Math.max(20, (window.width - width) / 2)
+        y: Math.max(20, (window.height - height) / 2)
+        standardButtons: Dialog.Ok
+
+        background: Rectangle {
+            color: "#111722"
+            radius: 14
+            border.width: 1
+            border.color: "#26768A"
+        }
+
+        contentItem: ScrollView {
+            clip: true
+
+            Text {
+                width: deviceCopyHelpDialog.width - 72
+                text: window.deviceCopyHelpText
+                color: "#DCE4F0"
+                font.pixelSize: 13
+                wrapMode: Text.Wrap
+                padding: 10
+                textFormat: Text.PlainText
+            }
+        }
+    }
+
+    Dialog {
+        id: androidDataFallbackDialog
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        title: "تعذر النسخ إلى Android/data"
+        width: Math.min(640, window.width - 40)
+        height: Math.min(460, window.height - 40)
+        x: Math.max(20, (window.width - width) / 2)
+        y: Math.max(20, (window.height - height) / 2)
+
+        background: Rectangle {
+            color: "#111722"
+            radius: 14
+            border.width: 1
+            border.color: "#C18A39"
+        }
+
+        contentItem: ScrollView {
+            clip: true
+            Column {
+                width: androidDataFallbackDialog.width - 48
+                spacing: 12
+
+                Text {
+                    width: parent.width
+                    text: "رفض الهاتف " + window.androidDataFallbackSerial
+                          + " الكتابة إلى Android/data أثناء نسخ "
+                          + window.androidDataFallbackGame + "."
+                    color: "#DCE4F0"
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 14
+                }
+
+                Text {
+                    width: parent.width
+                    text: "هل تريد إعادة النسخ إلى مجلد مستقل في جذر الذاكرة الداخلية بدلًا من ذلك؟"
+                    color: "#DCE4F0"
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 13
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 48
+                    radius: 8
+                    color: "#1A2533"
+                    border.width: 1
+                    border.color: "#5B6E86"
+
+                    Text {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        verticalAlignment: Text.AlignVCenter
+                        text: window.androidDataFallbackDestination
+                        color: "#9CEBFA"
+                        font.pixelSize: 13
+                        elide: Text.ElideMiddle
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    text: window.androidDataFallbackReason
+                    color: "#AAB6C8"
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 11
+                    textFormat: Text.PlainText
+                }
+            }
+        }
+
+        footer: RowLayout {
+            width: androidDataFallbackDialog.width - 24
+            spacing: 12
+
+            Button {
+                text: "نسخ إلى الجذر"
+                Layout.alignment: Qt.AlignRight
+                onClicked: window.finishAndroidDataFallback(true)
+            }
+
+            Button {
+                text: "إلغاء"
+                onClicked: window.finishAndroidDataFallback(false)
             }
         }
     }
@@ -1354,11 +1695,69 @@ ApplicationWindow {
                 model: window.adbDevices
 
                 delegate: CheckBox {
+                    id: deviceSelectionCheckBox
                     width: ListView.view.width
+                    height: 42
+                    padding: 8
+                    spacing: 8
                     text: modelData.model + " / " + modelData.serial
                     checked: window.selectedAdbSerials.indexOf(
                                  modelData.serial
                              ) !== -1
+
+                    // Explicit high-contrast text and selection styling:
+                    // the selected device remains readable against the popup.
+                    indicator: Rectangle {
+                        implicitWidth: 20
+                        implicitHeight: 20
+                        x: deviceSelectionCheckBox.leftPadding
+                        y: deviceSelectionCheckBox.height / 2 - height / 2
+                        radius: 5
+                        color: deviceSelectionCheckBox.checked
+                               ? "#00D9FF"
+                               : "#0B111A"
+                        border.width: 1
+                        border.color: deviceSelectionCheckBox.checked
+                                      ? "#00D9FF"
+                                      : "#65748A"
+
+                        Text {
+                            anchors.centerIn: parent
+                            visible: deviceSelectionCheckBox.checked
+                            text: "✓"
+                            color: "#071019"
+                            font.pixelSize: 14
+                            font.bold: true
+                        }
+                    }
+
+                    contentItem: Text {
+                        text: deviceSelectionCheckBox.text
+                        color: deviceSelectionCheckBox.checked
+                               ? "#FFFFFF"
+                               : "#DCE4F0"
+                        font.pixelSize: 12
+                        font.bold: deviceSelectionCheckBox.checked
+                        verticalAlignment: Text.AlignVCenter
+                        leftPadding: deviceSelectionCheckBox.indicator.width
+                                     + deviceSelectionCheckBox.spacing
+                        rightPadding: 8
+                        elide: Text.ElideRight
+                    }
+
+                    background: Rectangle {
+                        radius: 8
+                        color: deviceSelectionCheckBox.checked
+                               ? "#153845"
+                               : deviceSelectionCheckBox.hovered
+                                 ? "#1A2432"
+                                 : "#141B27"
+                        border.width: 1
+                        border.color: deviceSelectionCheckBox.checked
+                                      ? "#00D9FF"
+                                      : "#2A3546"
+                    }
+
                     onClicked: {
                         var selected = window.selectedAdbSerials.slice()
                         var index = selected.indexOf(modelData.serial)

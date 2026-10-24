@@ -1,7 +1,13 @@
-name: Build Windows EXE
+name: Build Windows Source-Only Installer
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -11,40 +17,144 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Setup Python for validation only
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
+      - name: Install validation dependencies on the runner
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
-          if (Test-Path requirements.txt) {
-            pip install -r requirements.txt
-          }
-          pip install pyinstaller
+          python -m pip install -r requirements.txt
 
-      - name: Build EXE
+      - name: Run regression simulation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: "1"
         run: |
-          python -m PyInstaller --clean --noconfirm KAFIA_NET_CONTROL_PRO.spec
+          $ErrorActionPreference = "Stop"
+          python validation\multi_device_simulation.py
+
+      - name: Validate external-runtime launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $launcher = Get-Content "Start-KAFIANET-CONTROL-PRO.cmd" -Raw
+          $powershellLauncher = Get-Content "Start-KAFIANET-CONTROL-PRO.ps1" -Raw
+          $hiddenLauncher = Get-Content "Launch-KAFIA-NET-CONTROL-PRO.vbs" -Raw
+          if ([regex]::IsMatch($launcher, '[^\x00-\x7F]')) {
+            throw "CMD launcher must remain ASCII-only to avoid Windows codepage corruption."
+          }
+          if (-not $launcher.Contains('Launch-KAFIA-NET-CONTROL-PRO.vbs') -or
+              -not $launcher.Contains('wscript.exe')) {
+            throw "CMD launcher does not start the hidden VBS launcher."
+          }
+          if ([regex]::IsMatch($powershellLauncher, '[^\x00-\x7F]')) {
+            throw "PowerShell launcher must construct Arabic path components from Unicode code points."
+          }
+          if ([regex]::IsMatch($hiddenLauncher, '[^\x00-\x7F]')) {
+            throw "The hidden launcher must remain ASCII-only."
+          }
+          if (-not $hiddenLauncher.Contains('Start-KAFIANET-CONTROL-PRO.ps1') -or
+              -not $hiddenLauncher.Contains('shell.Run(command, 0, True)')) {
+            throw "The VBS launcher must run PowerShell invisibly and wait for the GUI app."
+          }
+          if (-not $powershellLauncher.Contains('& $pythonExe $bootstrap') -or
+              $powershellLauncher.Contains('Start-Process -FilePath $pythonExe') -or
+              -not $powershellLauncher.Contains('WScript.Shell')) {
+            throw "PowerShell must run the GUI app in the already-hidden VBS host without hiding the Qt window."
+          }
+          if (-not $powershellLauncher.Contains('SERVER06\c$') -or
+              -not $powershellLauncher.Contains('0x0639') -or
+              -not $powershellLauncher.Contains('0x062E')) {
+            throw "PowerShell launcher is missing the approved SERVER06 path or Unicode folder components."
+          }
+          foreach ($required in @('PYTHONHOME', 'PYTHONPATH', '--qt-import-smoke-test', 'kafianet_external_runtime.py')) {
+            if (-not $powershellLauncher.Contains($required)) {
+              throw "PowerShell launcher is missing required setting or preflight: $required"
+            }
+          }
+          $bootstrap = Get-Content "kafianet_external_runtime.py" -Raw
+          if (-not $bootstrap.Contains('os.add_dll_directory')) {
+            throw "External-runtime bootstrap is missing explicit DLL-directory setup."
+          }
+          if (-not $bootstrap.Contains('SERVER06\c$\العابي\222\66\الاخييير\py')) {
+            throw "External-runtime bootstrap has a different runtime path."
+          }
+          if ($powershellLauncher -match 'Invoke-WebRequest|pip install|vc_redist') {
+            throw "The launcher must not download or install runtime components."
+          }
+
+      - name: Prepare source-only application payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "source-package"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item "app_qml.py" "$stage\app_qml.py"
+          Copy-Item "games.json" "$stage\games.json"
+          Copy-Item "Start-KAFIANET-CONTROL-PRO.cmd" "$stage\Start-KAFIANET-CONTROL-PRO.cmd"
+          Copy-Item "Start-KAFIANET-CONTROL-PRO.ps1" "$stage\Start-KAFIANET-CONTROL-PRO.ps1"
+          Copy-Item "Launch-KAFIA-NET-CONTROL-PRO.vbs" "$stage\Launch-KAFIA-NET-CONTROL-PRO.vbs"
+          Copy-Item "kafianet_external_runtime.py" "$stage\kafianet_external_runtime.py"
+          Copy-Item "requirements.txt" "$stage\requirements.txt"
+          Copy-Item "README.md" "$stage\README.md"
+
+          foreach ($directory in @("engine", "qml", "assets", "ui")) {
+            if (-not (Test-Path $directory -PathType Container)) {
+              throw "Required application directory is missing: $directory"
+            }
+            Copy-Item $directory "$stage\$directory" -Recurse
+          }
+
+          New-Item -ItemType Directory -Force -Path "$stage\platform-tools" | Out-Null
+          Copy-Item "platform-tools\adb.exe" "$stage\platform-tools\adb.exe"
+          Copy-Item "platform-tools\AdbWinApi.dll" "$stage\platform-tools\AdbWinApi.dll"
+          Copy-Item "platform-tools\AdbWinUsbApi.dll" "$stage\platform-tools\AdbWinUsbApi.dll"
+
+          Get-ChildItem $stage -Recurse -Directory -Filter "__pycache__" |
+            Remove-Item -Recurse -Force
+          Get-ChildItem $stage -Recurse -File -Filter "*.pyc" |
+            Remove-Item -Force
+
+          $runtimeFiles = Get-ChildItem $stage -Recurse -File |
+            Where-Object {
+              $_.Name -match '^(python(?:w|3|3\d+)?\.exe|python(?:3|3\d+)?\.dll|vc_redist.*\.exe)$'
+            }
+          if ($runtimeFiles) {
+            $runtimeFiles | ForEach-Object { Write-Error "Forbidden runtime file in payload: $($_.FullName)" }
+            throw "Refusing to package Python/VC runtime files."
+          }
+
+          Write-Host "Source-only payload prepared. Python and Qt runtime binaries are external."
+          Get-ChildItem $stage -Recurse -File |
+            Measure-Object -Property Length -Sum |
+            ForEach-Object { Write-Host ("Payload size: {0:N2} MB" -f ($_.Sum / 1MB)) }
 
       - name: Install Inno Setup
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           choco install innosetup --yes --no-progress
 
-      - name: Create Installer script
+      - name: Create source-only installer script
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path installer | Out-Null
           @'
           [Setup]
+          AppId={{B4D7AD2E-9E10-4B2A-B1AA-5246A3B9D8F4}
           AppName=KAFIA NET CONTROL PRO
-          AppVersion=1.0.0
+          AppVersion=1.1.0
           DefaultDirName={autopf}\KAFIA NET CONTROL PRO
           DefaultGroupName=KAFIA NET CONTROL PRO
           OutputDir=installer
-          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_Setup
+          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_ExternalPython_Setup
           Compression=lzma2
           SolidCompression=yes
           ArchitecturesInstallIn64BitMode=x64compatible
@@ -52,23 +162,30 @@ jobs:
           Uninstallable=yes
 
           [Files]
-          Source: "dist\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+          Source: "source-package\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
           [Icons]
-          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
-          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA NET CONTROL PRO.exe"
+          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\Launch-KAFIA-NET-CONTROL-PRO.vbs"""; WorkingDir: "{app}"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\Launch-KAFIA-NET-CONTROL-PRO.vbs"""; WorkingDir: "{app}"
 
           [Run]
-          Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+          Filename: "{sys}\wscript.exe"; Parameters: """{app}\Launch-KAFIA-NET-CONTROL-PRO.vbs"""; WorkingDir: "{app}"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
           '@ | Set-Content -Path installer.iss -Encoding UTF8
 
-      - name: Build Installer
+      - name: Build and verify installer
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }
+          $installer = Get-Item "installer\KAFIA_NET_CONTROL_PRO_ExternalPython_Setup.exe"
+          if ($installer.Length -gt 50000000) {
+            throw "Source-only installer exceeds 50 MB; refusing to publish a package that may contain a runtime."
+          }
+          Write-Host ("Source-only installer: {0:N2} MB" -f ($installer.Length / 1MB))
 
-      - name: Upload Windows packages
+      - name: Upload external-Python installer
         uses: actions/upload-artifact@v4
         with:
-          name: KAFIA_NET_CONTROL_PRO-Windows
-          path: installer/KAFIA_NET_CONTROL_PRO_Setup.exe
+          name: KAFIA_NET_CONTROL_PRO-ExternalPython-Installer
+          path: installer/KAFIA_NET_CONTROL_PRO_ExternalPython_Setup.exe

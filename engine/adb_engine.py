@@ -115,23 +115,24 @@ class ADBEngine(QObject):
         self._current_process = None
         self._process_lock = threading.Lock()
         self._process_paused = False
+        self._reconnect_retry_count = 0
+        self._progress_offset_bytes = 0
+        self._progress_offset_percent = 0
         self._cancelled_by_user = False
 
     def _get_adb_path(self):
-        # Prefer the shared fixed ADB installation used by all
-        # KAFIA NET CONTROL PRO updates.
+        # Prefer the ADB binary bundled with this application. This keeps
+        # packaged builds independent of a machine-specific D:\games path.
+        local_adb = BASE_DIR / "platform-tools" / "adb.exe"
+        if local_adb.is_file():
+            return str(local_adb)
+
+        # Development fallback for the shared workstation installation.
         external_adb = Path(
             r"D:\games\programe files\platform-tools\adb.exe"
         )
-
         if external_adb.is_file():
             return str(external_adb)
-
-        # Development/local fallback.
-        local_adb = BASE_DIR / "platform-tools" / "adb.exe"
-
-        if local_adb.is_file():
-            return str(local_adb)
 
         # Final fallback: allow adb.exe from PATH.
         return "adb"
@@ -205,75 +206,42 @@ class ADBEngine(QObject):
 
     @Slot(result=list)
     def get_devices(self):
-
-        result = self._run(
-            ["devices"]
-        )
+        try:
+            result = self._run(["devices"], timeout=10)
+        except Exception as exc:
+            print("ADB DEVICE LIST FAILED:", exc)
+            self.devicesChanged.emit([])
+            return []
 
         devices = []
-
         for line in result.stdout.splitlines():
-
             line = line.strip()
-
             if not line or line.startswith("List of devices"):
                 continue
 
             parts = line.split()
-
-            if len(parts) < 2:
+            if len(parts) < 2 or parts[1] != "device":
                 continue
 
             serial = parts[0]
-            state = parts[1]
 
-            if state != "device":
-                continue
+            def read_device_property(args):
+                try:
+                    property_result = self._run(args, timeout=3)
+                    return property_result.stdout.strip()
+                except Exception as exc:
+                    print("ADB DEVICE PROPERTY WARNING:", serial, exc)
+                    return ""
 
-            model_result = self._run(
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "getprop",
-                    "ro.product.model"
-                ]
-            )
-
-            manufacturer_result = self._run(
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "getprop",
-                    "ro.product.manufacturer"
-                ]
-            )
-
-            model = model_result.stdout.strip()
-            manufacturer = manufacturer_result.stdout.strip()
-
-            if not model:
-                model = "Android"
-
-            if not manufacturer:
-                manufacturer = "Android"
-
-            # Prefer the user-assigned Android device name.
-            # Fall back to manufacturer + model when unavailable.
-            device_name_result = self._run(
-                [
-                    "-s",
-                    serial,
-                    "shell",
-                    "settings",
-                    "get",
-                    "global",
-                    "device_name"
-                ]
-            )
-
-            device_name = device_name_result.stdout.strip()
+            model = read_device_property([
+                "-s", serial, "shell", "getprop", "ro.product.model"
+            ]) or "Android"
+            manufacturer = read_device_property([
+                "-s", serial, "shell", "getprop", "ro.product.manufacturer"
+            ]) or "Android"
+            device_name = read_device_property([
+                "-s", serial, "shell", "settings", "get", "global", "device_name"
+            ])
 
             if not device_name or device_name.lower() in {"null", "unknown"}:
                 device_name = f"{manufacturer} {model}".strip()
@@ -286,7 +254,6 @@ class ADBEngine(QObject):
             })
 
         self.devicesChanged.emit(devices)
-
         return devices
 
     def _format_size(self, size):
@@ -420,6 +387,70 @@ class ADBEngine(QObject):
             eta
         )
 
+    @staticmethod
+    def _combined_native_progress_percent(offset_percent, attempt_percent):
+        """Keep native ADB progress monotonic when a disconnected copy retries."""
+        offset = max(0, min(int(offset_percent), 99))
+        attempt = max(0, min(int(attempt_percent), 100))
+        combined = offset + ((100 - offset) * attempt / 100.0)
+        return max(offset, min(int(combined), 99))
+
+    @staticmethod
+    def _parse_adb_progress_details(line):
+        """Parse ADB's overall progress line and current local-file progress."""
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(line or "")).strip()
+        overall = re.search(r"^\[\s*(\d{1,3})%\s*\]\s*(.*)$", text)
+        if overall:
+            percent = max(0, min(int(overall.group(1)), 100))
+            remainder = overall.group(2).strip()
+            file_match = re.match(r"^(.*):\s*(\d{1,3})%\s*$", remainder)
+            if file_match:
+                file_path = file_match.group(1).strip().strip('"')
+                file_percent = max(0, min(int(file_match.group(2)), 100))
+                return percent, file_path, file_percent
+            file_path = remainder.strip('"')
+            return percent, (file_path or None), (percent if file_path else None)
+
+        # Compatibility with platform-tools that emit a per-file percent/rate.
+        legacy = re.search(
+            r"(?<!\d)(\d{1,3})%\s+(\d+(?:\.\d+)?)([KMGTP]?B)/s",
+            text,
+            re.IGNORECASE
+        )
+        if legacy:
+            return max(0, min(int(legacy.group(1)), 100)), None, None
+        return None, None, None
+
+    @staticmethod
+    def _parse_adb_transfer_speed(line):
+        """Return measured ADB throughput in bytes/second, when present."""
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(line or ""))
+        transfer = re.search(
+            r"\(\s*(\d+)\s+bytes\s+in\s+(\d+(?:\.\d+)?)s\s*\)",
+            text,
+            re.IGNORECASE
+        )
+        if transfer:
+            seconds = float(transfer.group(2))
+            if seconds > 0:
+                return float(transfer.group(1)) / seconds
+
+        rate = re.search(
+            r"(\d+(?:\.\d+)?)\s*(KB|MB|GB|TB|B)/s\b",
+            text,
+            re.IGNORECASE
+        )
+        if not rate:
+            return None
+        multipliers = {
+            "B": 1,
+            "KB": 1024,
+            "MB": 1024 ** 2,
+            "GB": 1024 ** 3,
+            "TB": 1024 ** 4,
+        }
+        return float(rate.group(1)) * multipliers[rate.group(2).upper()]
+
     def _parse_progress(self, line):
 
         match = re.search(
@@ -455,9 +486,21 @@ class ADBEngine(QObject):
             "00:00"
         )
 
+    def _device_is_connected(self, device):
+        """Return whether ADB currently sees this serial as an online device."""
+        try:
+            result = self._run(["-s", device, "get-state"], timeout=5)
+            return (
+                result.returncode == 0
+                and result.stdout.strip().lower() == "device"
+            )
+        except Exception as exc:
+            print("ADB DEVICE STATE CHECK FAILED:", device, exc)
+            return False
+
     def _wait_for_device_reconnect(self, device):
         self.statusChanged.emit(
-            "الهاتف مفصول — بانتظار إعادة التوصيل..."
+            "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..."
         )
 
         print(
@@ -489,7 +532,7 @@ class ADBEngine(QObject):
                     and result.stdout.strip().lower() == "device"
                 ):
                     self.statusChanged.emit(
-                        "تمت إعادة توصيل الهاتف — استئناف النقل..."
+                        "تمت إعادة توصيل الهاتف — استكمال النسخ..."
                     )
 
                     print(
@@ -540,6 +583,49 @@ class ADBEngine(QObject):
             )
             return None
 
+    @staticmethod
+    def _adb_source_plan(source_path, destination):
+        """Choose source args/ADB target without nesting a source root.
+
+        When the local directory basename matches the remote directory name,
+        pass the directory itself to its remote parent. This keeps very large
+        folders to one source argument, including Windows case-only aliases
+        such as local "saved" and remote "Saved". Otherwise pass each direct
+        child into the exact destination root.
+        """
+        remote_destination = destination.rstrip("/")
+        remote_leaf = remote_destination.rsplit("/", 1)[-1]
+        remote_parent = remote_destination.rsplit("/", 1)[0] or "/"
+
+        if (
+            source_path.is_dir()
+            and source_path.name.casefold() == remote_leaf.casefold()
+        ):
+            source_alias = source_path.with_name(remote_leaf)
+            if source_alias.exists():
+                return [str(source_alias)], remote_parent
+
+        if source_path.is_dir():
+            return (
+                [
+                    str(path)
+                    for path in sorted(
+                        source_path.iterdir(),
+                        key=lambda item: item.name.casefold()
+                    )
+                ],
+                remote_destination
+            )
+        return [str(source_path)], remote_destination
+
+    @staticmethod
+    def _combined_progress_percent(total_bytes, offset_bytes, attempt_bytes):
+        """Return monotonic overall progress across reconnect retries."""
+        if total_bytes <= 0:
+            return 0
+        transferred = min(max(offset_bytes + attempt_bytes, 0), total_bytes)
+        return max(0, min(int(transferred * 100 / total_bytes), 99))
+
     def _push_thread(
         self,
         device,
@@ -548,6 +634,8 @@ class ADBEngine(QObject):
     ):
 
         process = None
+        requested_source = str(source)
+        requested_destination = destination
 
         try:
 
@@ -566,20 +654,21 @@ class ADBEngine(QObject):
 
                 return
 
-            # Treat the configured destination as the exact root
-            # of the copy. The trailing "/." prevents adb from
-            # introducing the source directory name underneath it.
-            destination = destination.rstrip("/") + "/."
+            # The destination is the exact root for the source contents.
+            # Explicit child source arguments avoid ADB appending the source
+            # directory name under an already-created destination.
+            destination = destination.rstrip("/")
 
             # --------------------------------------------------------
             # --------------------------------------------------------
             # PRE-FLIGHT DESTINATION WRITE CHECK
             # Direct ADB shell commands only.
             # --------------------------------------------------------
-            check_path = destination.rstrip('/.') or destination
+            check_path = destination.rstrip('/') or destination
             check_file = (
                 check_path.rstrip('/')
-                + '/.cncall_write_test'
+                + f'/.cncall_write_test_{os.getpid()}_'
+                f'{threading.get_ident()}_{time.time_ns()}'
             )
 
             print(
@@ -604,6 +693,7 @@ class ADBEngine(QObject):
                 encoding="utf-8",
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
             )
 
             if mkdir_result.returncode != 0:
@@ -646,6 +736,7 @@ class ADBEngine(QObject):
                 encoding="utf-8",
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
             )
 
             if write_result.returncode != 0:
@@ -689,6 +780,7 @@ class ADBEngine(QObject):
                 encoding="utf-8",
                 errors="ignore",
                 creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=10,
             )
 
             if cleanup_result.returncode != 0:
@@ -707,6 +799,33 @@ class ADBEngine(QObject):
                 else source_path.stat().st_size
             )
 
+            progress_offset_bytes = min(
+                self._progress_offset_bytes,
+                total_bytes
+            )
+            progress_offset_percent = max(
+                0,
+                min(int(self._progress_offset_percent), 99)
+            )
+
+            if source_path.is_dir() and next(source_path.iterdir(), None) is None:
+                self.progressChanged.emit(100, "0 B/s", "00:00")
+                self.statusChanged.emit("اكتمل النسخ")
+                self.finished.emit(True, "المصدر فارغ؛ تم تجهيز مجلد الوجهة")
+                return
+
+            adb_sources, adb_destination = self._adb_source_plan(
+                source_path,
+                destination
+            )
+            if not adb_sources:
+                self.progressChanged.emit(100, "0 B/s", "00:00")
+                self.statusChanged.emit("اكتمل النسخ")
+                self.finished.emit(True, "المصدر فارغ؛ تم تجهيز مجلد الوجهة")
+                return
+            print("ADB SOURCE ARGUMENT COUNT:", len(adb_sources))
+            print("ADB DESTINATION ARGUMENT:", adb_destination)
+
             print()
             print("========================================")
             print("ADB FAST TRANSFER ENGINE")
@@ -723,8 +842,9 @@ class ADBEngine(QObject):
                 "-s",
                 device,
                 "push",
-                str(source_path),
-                destination
+                "--sync",
+                *adb_sources,
+                adb_destination
             ]
 
             print(
@@ -752,7 +872,7 @@ class ADBEngine(QObject):
 
             process = subprocess.Popen(
                 command,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 stdin=subprocess.DEVNULL,
                 startupinfo=startupinfo,
@@ -761,6 +881,192 @@ class ADBEngine(QObject):
                 )
             )
 
+            # ADB writes its live transfer progress to stdout when stdout is
+            # redirected (the normal case for this hidden GUI). Keep both streams
+            # captured and parsed, so neither LAN nor local HDD loses progress.
+            stdout_chunks = []
+            stderr_chunks = []
+            progress_stop = threading.Event()
+            progress_lock = threading.Lock()
+            start_time = time.monotonic()
+            progress_state = {
+                "bytes": 0,
+                "speed": 0.0,
+                "last_percent": -1,
+                "speed_samples": [],
+                "native_seen": False,
+                "native_percent": 0,
+                "native_display_percent": progress_offset_percent,
+                "native_speed_seen": False,
+                "current_file_path": "",
+                "current_file_percent": 0,
+                "current_file_time": start_time,
+                "file_size_cache": {},
+            }
+
+            def progress_snapshot_locked():
+                if progress_state["native_seen"]:
+                    # Native ADB percent already excludes files skipped by --sync.
+                    percent = progress_state["native_display_percent"]
+                    transferred_bytes = int(total_bytes * percent / 100)
+                else:
+                    transferred_bytes = min(
+                        progress_offset_bytes + progress_state["bytes"],
+                        total_bytes
+                    )
+                    percent = self._combined_progress_percent(
+                        total_bytes,
+                        progress_offset_bytes,
+                        progress_state["bytes"]
+                    )
+
+                percent = max(progress_state["last_percent"], percent)
+                progress_state["last_percent"] = percent
+                speed = progress_state["speed"]
+                if progress_state["native_seen"]:
+                    elapsed = max(time.monotonic() - start_time, 0.001)
+                    remaining_seconds = (
+                        elapsed * max(100 - percent, 0) / max(percent, 1)
+                    )
+                    eta = (
+                        self._format_time(remaining_seconds)
+                        if 0 < percent < 100
+                        else "--"
+                    )
+                else:
+                    remaining_bytes = max(total_bytes - transferred_bytes, 0)
+                    eta = (
+                        self._format_time(remaining_bytes / speed)
+                        if speed > 0
+                        else "--"
+                    )
+                speed_text = (
+                    self._format_size(speed) + "/s"
+                    if speed > 0
+                    else "0 B/s"
+                )
+                return percent, speed_text, eta, transferred_bytes
+
+            def emit_progress():
+                with progress_lock:
+                    percent, speed_text, eta, transferred = progress_snapshot_locked()
+                self.progressChanged.emit(percent, speed_text, eta)
+                print(
+                    "ADB TRANSFER PROGRESS:",
+                    f"{percent}%",
+                    "|",
+                    self._format_size(transferred),
+                    "/",
+                    self._format_size(total_bytes),
+                    "|",
+                    speed_text,
+                    "| ETA:",
+                    eta
+                )
+
+            def report_adb_output_line(line):
+                overall_percent, file_path, file_percent = (
+                    self._parse_adb_progress_details(line)
+                )
+                measured_speed = self._parse_adb_transfer_speed(line)
+                if overall_percent is None and measured_speed is None:
+                    return
+
+                now = time.monotonic()
+                with progress_lock:
+                    if overall_percent is not None:
+                        was_native_seen = progress_state["native_seen"]
+                        progress_state["native_seen"] = True
+                        progress_state["native_percent"] = max(
+                            progress_state["native_percent"], overall_percent
+                        )
+                        combined_percent = self._combined_native_progress_percent(
+                            progress_offset_percent,
+                            progress_state["native_percent"]
+                        )
+                        if was_native_seen:
+                            progress_state["native_display_percent"] = max(
+                                progress_state["native_display_percent"],
+                                combined_percent
+                            )
+                        else:
+                            # Discard any early process-I/O estimate when ADB's
+                            # authoritative overall percentage first arrives.
+                            progress_state["native_display_percent"] = combined_percent
+                            progress_state["last_percent"] = combined_percent
+
+                    samples = progress_state["speed_samples"]
+                    if measured_speed is not None and measured_speed > 0:
+                        samples.append(measured_speed)
+                        progress_state["native_speed_seen"] = True
+
+                    if file_path and file_percent is not None:
+                        file_key = os.path.normcase(os.path.normpath(file_path))
+                        cache = progress_state["file_size_cache"]
+                        if file_key not in cache:
+                            try:
+                                cache[file_key] = Path(file_path).stat().st_size
+                            except (OSError, ValueError):
+                                cache[file_key] = 0
+                        file_size = cache[file_key]
+
+                        is_new_file = (
+                            file_key != progress_state["current_file_path"]
+                        )
+                        if is_new_file:
+                            progress_state["current_file_path"] = file_key
+                            progress_state["current_file_percent"] = 0
+                            progress_state["current_file_time"] = now
+
+                        previous_percent = progress_state["current_file_percent"]
+                        previous_time = progress_state["current_file_time"]
+                        if (
+                            not is_new_file
+                            and file_size > 0
+                            and file_percent > previous_percent
+                            and now > previous_time
+                        ):
+                            delta_bytes = (
+                                file_size * (file_percent - previous_percent) / 100.0
+                            )
+                            elapsed = max(now - previous_time, 0.001)
+                            file_speed = delta_bytes / elapsed
+                            if file_speed > 0:
+                                samples.append(file_speed)
+                                progress_state["native_speed_seen"] = True
+
+                        if file_percent >= previous_percent:
+                            progress_state["current_file_percent"] = file_percent
+                            progress_state["current_file_time"] = now
+
+                    if len(samples) > 8:
+                        del samples[:-8]
+                    if samples:
+                        progress_state["speed"] = sum(samples) / len(samples)
+
+                emit_progress()
+                print("ADB NATIVE PROGRESS LINE:", line.strip())
+
+            def drain_output(stream, chunks, channel):
+                if stream is None:
+                    return
+                pending = ""
+                try:
+                    while True:
+                        chunk = stream.read1(4096)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        pending += chunk.decode("utf-8", errors="replace")
+                        fragments = re.split(r"[\\r\\n]+", pending)
+                        pending = fragments.pop()
+                        for fragment in fragments:
+                            report_adb_output_line(fragment)
+                    if pending:
+                        report_adb_output_line(pending)
+                except Exception as exc:
+                    print(f"ADB {channel.upper()} DRAIN WARNING:", exc)
+
             with self._process_lock:
                 self._current_process = process
                 cancelled = self._cancel_event.is_set()
@@ -768,213 +1074,62 @@ class ADBEngine(QObject):
             if cancelled:
                 process.terminate()
 
-            start_time = time.monotonic()
+            stdout_reader = threading.Thread(
+                target=drain_output,
+                args=(process.stdout, stdout_chunks, "stdout"),
+                name=f"ADB-stdout-{device}",
+                daemon=True
+            )
+            stderr_reader = threading.Thread(
+                target=drain_output,
+                args=(process.stderr, stderr_chunks, "stderr"),
+                name=f"ADB-stderr-{device}",
+                daemon=True
+            )
+            stdout_reader.start()
+            stderr_reader.start()
 
-            # --------------------------------------------------------
-            # INTERNAL ADB I/O LIVE PROGRESS
-            # --------------------------------------------------------
-
-            progress_stop = threading.Event()
-
-            progress_state = {
-                "bytes": 0,
-                "speed": 0.0,
-                "last_percent": -1,
-                "speed_samples": []
-            }
-
-            def io_progress_callback(
-                io_bytes,
-                io_speed
-            ):
-
+            def io_progress_callback(io_bytes, io_speed):
                 if progress_stop.is_set():
                     return
 
-                delta_bytes = max(
-                    int(io_bytes),
-                    0
-                )
-
-                progress_state["bytes"] += (
-                    delta_bytes
-                )
-
-                # ----------------------------------------------------
-                # SMOOTH LIVE SPEED
-                # Average the latest samples so the displayed speed
-                # and ETA do not jump sharply every 200 ms.
-                # ----------------------------------------------------
-
-                raw_speed = max(
-                    float(io_speed),
-                    0.0
-                )
-
-                samples = progress_state[
-                    "speed_samples"
-                ]
-
-                if raw_speed > 0:
-                    samples.append(raw_speed)
-
-                if len(samples) > 8:
-                    del samples[:-8]
-
-                if samples:
-                    speed = (
-                        sum(samples)
-                        / len(samples)
-                    )
-                else:
-                    speed = 0.0
-
-                progress_state["speed"] = speed
-
-                transferred_bytes = min(
-                    progress_state["bytes"],
-                    total_bytes
-                )
-
-                if total_bytes > 0:
-
-                    percent = int(
-                        transferred_bytes
-                        * 100
-                        / total_bytes
-                    )
-
-                else:
-
-                    percent = 0
-
-                # Keep 100% reserved for successful completion.
-                # Allow the live I/O estimate to reach 100%.
-                # Successful ADB completion still emits the final
-                # authoritative 100% below.
-                percent = max(
-                    0,
-                    min(percent, 100)
-                )
-
-                if (
-                    speed > 0
-                    and total_bytes > 0
-                ):
-
-                    remaining_bytes = max(
-                        total_bytes
-                        - transferred_bytes,
-                        0
-                    )
-
-                    remaining = (
-                        remaining_bytes
-                        / speed
-                    )
-
-                else:
-
-                    remaining = 0.0
-
-                if (
-                    percent !=
-                    progress_state["last_percent"]
-                    or speed > 0
-                ):
-
-                    progress_state[
-                        "last_percent"
-                    ] = percent
-
-                    speed_text = (
-                        self._format_size(
-                            speed
-                        )
-                        + "/s"
-                        if speed > 0
-                        else "0 B/s"
-                    )
-
-                    eta_text = (
-                        self._format_time(
-                            remaining
-                        )
-                    )
-
-                    self.progressChanged.emit(
-                        percent,
-                        speed_text,
-                        eta_text
-                    )
-
-                    print(
-                        "IO PROGRESS:",
-                        f"{percent}%",
-                        "|",
-                        self._format_size(
-                            transferred_bytes
-                        ),
-                        "/",
-                        self._format_size(
-                            total_bytes
-                        ),
-                        "|",
-                        speed_text,
-                        "| ETA:",
-                        eta_text
-                    )
+                delta_bytes = max(int(io_bytes), 0)
+                raw_speed = max(float(io_speed), 0.0)
+                with progress_lock:
+                    progress_state["bytes"] += delta_bytes
+                    # Process-I/O speed is only a fallback. ADB's file/summary
+                    # measurements take precedence when the tool reports them.
+                    if raw_speed > 0 and not progress_state["native_speed_seen"]:
+                        samples = progress_state["speed_samples"]
+                        samples.append(raw_speed)
+                        if len(samples) > 8:
+                            del samples[:-8]
+                        progress_state["speed"] = sum(samples) / len(samples)
+                emit_progress()
 
             progress_thread = threading.Thread(
                 target=monitor_adb_io,
-                args=(
-                    process.pid,
-                    io_progress_callback,
-                    progress_stop
-                ),
+                args=(process.pid, io_progress_callback, progress_stop),
                 daemon=True
             )
-
             progress_thread.start()
 
-            # --------------------------------------------------------
-            # WAIT FOR THE REAL ADB PROCESS
-            # --------------------------------------------------------
-
+            # Drain both pipes while the real adb.exe process is running.
             return_code = process.wait()
-
             progress_stop.set()
+            progress_thread.join(timeout=1.0)
+            stdout_reader.join(timeout=2.0)
+            stderr_reader.join(timeout=2.0)
 
-            progress_thread.join(
-                timeout=1.0
+            stdout_text = b"".join(stdout_chunks).decode(
+                "utf-8", errors="ignore"
+            ).strip()
+            stderr_text = b"".join(stderr_chunks).decode(
+                "utf-8", errors="ignore"
+            ).strip()
+            combined_output = "\\n".join(
+                part for part in (stdout_text, stderr_text) if part
             )
-
-            # --------------------------------------------------------
-            # Read ADB error after process termination.
-            # --------------------------------------------------------
-
-            stderr_text = ""
-
-            try:
-
-                if process.stderr is not None:
-
-                    stderr_data = (
-                        process.stderr.read()
-                    )
-
-                    if stderr_data:
-
-                        stderr_text = (
-                            stderr_data.decode(
-                                "utf-8",
-                                errors="ignore"
-                            )
-                            .strip()
-                        )
-
-            except Exception:
-                stderr_text = ""
 
             with self._process_lock:
                 if self._current_process is process:
@@ -1002,11 +1157,9 @@ class ADBEngine(QObject):
                     0.001
                 )
 
-                average_speed = (
-                    total_bytes / elapsed
-                    if total_bytes > 0
-                    else 0
-                )
+                # Use the speed measured by ADB/native file progress. Do not
+                # infer throughput from source size because --sync may skip files.
+                average_speed = progress_state["speed"]
 
                 progress_state["bytes"] = (
                     total_bytes
@@ -1019,6 +1172,7 @@ class ADBEngine(QObject):
                     ) + "/s",
                     "00:00"
                 )
+                self._reconnect_retry_count = 0
 
                 self.statusChanged.emit(
                     "اكتمل النسخ"
@@ -1069,19 +1223,95 @@ class ADBEngine(QObject):
                 return_code
             )
 
-            if stderr_text:
+            if combined_output:
 
                 print(
-                    "ADB STDERR:",
-                    stderr_text
+                    "ADB OUTPUT:",
+                    combined_output
                 )
+
+            # A disconnected handset often makes adb push exit with a transport error.
+            # Wait for the same serial to return, then retry with --sync so files already
+            # copied successfully are not needlessly sent again.
+            stderr_lower = (combined_output or stderr_text or "").lower()
+            disconnect_markers = (
+                "device offline",
+                "device not found",
+                "no devices/emulators found",
+                "device disconnected",
+                "transport error",
+                "connection reset",
+                "error: closed",
+            )
+            looks_disconnected = any(
+                marker in stderr_lower
+                for marker in disconnect_markers
+            )
+            device_connected = self._device_is_connected(device)
+            if not device_connected or looks_disconnected:
+                # Preserve the completed/attempted byte estimate before starting
+                # a new adb process. --sync skips files already present on-device,
+                # but each new process has fresh local I/O counters.
+                if progress_state["native_seen"]:
+                    self._progress_offset_percent = max(
+                        self._progress_offset_percent,
+                        progress_state["native_display_percent"]
+                    )
+                else:
+                    self._progress_offset_bytes = min(
+                        total_bytes,
+                        progress_offset_bytes + progress_state["bytes"]
+                    )
+                print(
+                    "ADB PROGRESS OFFSET PRESERVED:",
+                    self._format_size(self._progress_offset_bytes),
+                    "/",
+                    self._format_size(total_bytes)
+                )
+
+                self.statusChanged.emit(
+                    "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..."
+                )
+                print("ADB PUSH INTERRUPTED; WAITING FOR RECONNECT:", device)
+                if self._wait_for_device_reconnect(device):
+                    if self._cancel_event.is_set():
+                        self.finished.emit(
+                            False,
+                            "تم إلغاء النسخ أثناء انتظار إعادة توصيل الهاتف"
+                        )
+                        return
+
+                    if self._reconnect_retry_count >= 10:
+                        self.finished.emit(
+                            False,
+                            "تكرر فشل اتصال الهاتف بعد إعادة التوصيل؛ أعد المحاولة يدويًا."
+                        )
+                        return
+                    self._reconnect_retry_count += 1
+                    self._process_paused = False
+                    self._pause_event.set()
+                    retry_thread = threading.Thread(
+                        target=self._push_thread,
+                        args=(device, requested_source, requested_destination),
+                        name=f"ADB-push-resume-{device}",
+                        daemon=True
+                    )
+                    self._thread = retry_thread
+                    retry_thread.start()
+                    return
+
+                self.finished.emit(
+                    False,
+                    "تعذر استعادة اتصال الهاتف أو تم إلغاء النسخ"
+                )
+                return
 
             self.finished.emit(
                 False,
                 (
                     "فشل النسخ عبر ADB: "
-                    + stderr_text
-                    if stderr_text
+                    + (combined_output or stderr_text)
+                    if (combined_output or stderr_text)
                     else "فشل النسخ عبر ADB"
                 )
             )
@@ -1110,6 +1340,10 @@ class ADBEngine(QObject):
             return
 
         self._pause_event.set()
+        self._process_paused = False
+        self._reconnect_retry_count = 0
+        self._progress_offset_bytes = 0
+        self._progress_offset_percent = 0
 
         self._cancel_event.clear()
         self._cancelled_by_user = False
@@ -1253,6 +1487,77 @@ class ADBEngine(QObject):
                         )
                     except Exception:
                         pass
+
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
+
+    @Slot(str, str, str)
+    def install_if_missing(self, device, apk, package_id):
+        """Install MT Manager only when it is not already present."""
+        self._cancel_event.clear()
+
+        def worker():
+            try:
+                check = self._run(
+                    ["-s", device, "shell", "pm", "path", package_id],
+                    timeout=30
+                )
+                check_output = (
+                    str(check.stdout or "")
+                    + "\n"
+                    + str(check.stderr or "")
+                ).strip()
+                is_installed = (
+                    check.returncode == 0
+                    and any(
+                        line.strip().startswith("package:")
+                        for line in str(check.stdout or "").splitlines()
+                    )
+                )
+
+                if is_installed:
+                    self.statusChanged.emit("MT Manager مثبت مسبقًا")
+                    self.finished.emit(True, "MT Manager مثبت مسبقًا")
+                    return
+
+                if not os.path.isfile(apk):
+                    self.finished.emit(
+                        False,
+                        "ملف MT Manager غير موجود أو مسار الشبكة غير متاح: "
+                        + str(apk)
+                    )
+                    return
+
+                self.statusChanged.emit("جاري تثبيت MT Manager قبل النسخ...")
+                result = self._run_install_command(
+                    ["-s", device, "install", "-r", apk],
+                    timeout=3600
+                )
+                output = (
+                    str(result.stdout or "").strip()
+                    + "\n"
+                    + str(result.stderr or "").strip()
+                ).strip()
+                print("ADB INSTALL MT MANAGER:", output or check_output)
+
+                if result.returncode == 0:
+                    self.statusChanged.emit("تم تجهيز MT Manager")
+                    self.finished.emit(True, "تم تثبيت MT Manager قبل النسخ")
+                else:
+                    self.finished.emit(
+                        False,
+                        "تعذر تثبيت MT Manager قبل النسخ: "
+                        + (output or check_output or "فشل أمر ADB install")
+                    )
+
+            except Exception as e:
+                print("MT MANAGER PRE-INSTALL ERROR:", e)
+                self.finished.emit(
+                    False,
+                    f"خطأ أثناء التحقق من MT Manager أو تثبيته: {e}"
+                )
 
         threading.Thread(
             target=worker,
@@ -1405,7 +1710,8 @@ class ADBEngine(QObject):
 
     def _resume_current_process(self):
 
-        process = self._current_process
+        with self._process_lock:
+            process = self._current_process
 
         if process is None:
             return False
@@ -1473,21 +1779,22 @@ class ADBEngine(QObject):
 
         return False
 
-    @Slot()
+    @Slot(result=bool)
     def pause(self):
 
         if self._process_paused:
-            return
+            return True
 
-        process = self._current_process
+        with self._process_lock:
+            process = self._current_process
 
         if process is None or process.poll() is not None:
 
             self.statusChanged.emit(
-                "لا توجد عملية نقل جارية"
+                "لا توجد عملية نقل يمكن إيقافها مؤقتًا الآن"
             )
 
-            return
+            return False
 
         if self._suspend_current_process():
 
@@ -1496,14 +1803,16 @@ class ADBEngine(QObject):
             self.statusChanged.emit(
                 "تم إيقاف النقل مؤقتًا"
             )
+            return True
 
         else:
 
             self.statusChanged.emit(
                 "تعذر إيقاف النقل مؤقتًا"
             )
+            return False
 
-    @Slot()
+    @Slot(result=bool)
     def resume(self):
 
         process = self._current_process
@@ -1516,7 +1825,7 @@ class ADBEngine(QObject):
                 "لا توجد عملية نقل جارية"
             )
 
-            return
+            return False
 
         if self._process_paused:
 
@@ -1527,12 +1836,14 @@ class ADBEngine(QObject):
                 self.statusChanged.emit(
                     "تم استئناف النقل..."
                 )
+                return True
 
             else:
 
                 self.statusChanged.emit(
                     "تعذر استئناف النقل"
                 )
+                return False
 
         else:
 
@@ -1541,6 +1852,7 @@ class ADBEngine(QObject):
             self.statusChanged.emit(
                 "تم استئناف النقل..."
             )
+            return True
 
     @Slot()
     def cancel(self):
