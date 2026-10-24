@@ -238,13 +238,13 @@ def test_adb_source_arguments_and_progress_offset():
     parsed = ADBEngine._parse_adb_progress_details(
         "[ 42%] C:\\games\\asset.pak: 65%"
     )
-    assert parsed == (42, r"C:\games\\asset.pak".replace("\\\\", "\\"), 65)
+    assert parsed == (42, r"C:\games\asset.pak", 65)
     single = ADBEngine._parse_adb_progress_details(
         "[ 7%] C:\\games\\single.pak"
     )
-    assert single == (7, r"C:\games\\single.pak".replace("\\\\", "\\"), 7)
+    assert single == (7, r"C:\games\single.pak", 7)
     assert ADBEngine._parse_adb_progress_details(
-        "\\x1b[2K[ 7%] asset.pak"
+        "\x1b[2K[ 7%] asset.pak"
     ) == (7, "asset.pak", 7)
     assert ADBEngine._parse_adb_progress_details("Transfer started") == (
         None, None, None
