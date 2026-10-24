@@ -518,6 +518,13 @@ def test_paths_and_ui():
     ) < engine_source.index('external_adb = Path(')
 
     assert "appController.refreshADBDevices()" in qml
+    # Device names must have explicit readable text and selection contrast.
+    assert "id: deviceSelectionCheckBox" in qml
+    assert "text: deviceSelectionCheckBox.text" in qml
+    assert 'color: "#FFFFFF"' in qml
+    assert 'color: "#DCE4F0"' in qml
+    assert 'color: "#153845"' in qml
+    assert 'border.color: deviceSelectionCheckBox.checked' in qml
     assert "appController.getADBDevices()" not in qml
     assert "if (appController.useWirelessSource())" in qml
     assert "if (appController.useUsbSource())" in qml
