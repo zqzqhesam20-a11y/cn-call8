@@ -234,6 +234,12 @@ def test_adb_source_arguments_and_progress_offset():
     assert ADBEngine._combined_progress_percent(1000, 1000, 0) == 99
     assert ADBEngine._combined_progress_percent(0, 0, 0) == 0
 
+    assert ADBEngine._combined_native_progress_percent(0, 0) == 0
+    assert ADBEngine._combined_native_progress_percent(0, 42) == 42
+    assert ADBEngine._combined_native_progress_percent(42, 0) == 42
+    assert ADBEngine._combined_native_progress_percent(42, 50) == 71
+    assert ADBEngine._combined_native_progress_percent(90, 100) == 99
+
     # Current ADB writes native progress rows to stdout for non-console runs.
     parsed = ADBEngine._parse_adb_progress_details(
         "[ 42%] C:\\games\\asset.pak: 65%"
@@ -533,12 +539,19 @@ def test_paths_and_ui():
     assert "stdout_reader.join(timeout=2.0)" in engine_source
     assert "stdout=subprocess.PIPE" in engine_source[wait_start:]
     assert 'args=(process.stdout, stdout_chunks, "stdout")' in engine_source
+    push_method = engine_source[wait_start:engine_source.index("@Slot(str, str, str)", wait_start)]
+    assert "stdout=subprocess.PIPE" in push_method
+    assert "stdout=subprocess.DEVNULL" not in push_method
     assert "def _parse_adb_progress_details(line)" in engine_source
     assert "self._parse_adb_progress_details(line)" in engine_source
     assert "def _parse_adb_transfer_speed(line)" in engine_source
     assert "def _combined_progress_percent(" in engine_source
     assert "min(int(transferred * 100 / total_bytes), 99)" in engine_source
     assert "self._combined_progress_percent(" in engine_source
+    assert "def _combined_native_progress_percent(" in engine_source
+    assert "self._combined_native_progress_percent(" in engine_source
+    assert 'progress_state["native_display_percent"]' in engine_source
+    assert 'progress_state["native_bytes"]' not in engine_source
     assert "time.time_ns()" in engine_source
     assert engine_source.index(
         'local_adb = BASE_DIR / "platform-tools" / "adb.exe"'
