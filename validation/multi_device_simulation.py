@@ -229,16 +229,26 @@ def test_adb_source_arguments_and_progress_offset():
         assert child_args == [str(different / "one.bin")]
         assert child_target == "/sdcard/ShadowTrackerExtra/Saved"
 
-    assert ADBEngine._combined_progress_percent(1000, 600, 0) == 60
-    assert ADBEngine._combined_progress_percent(1000, 600, 150) == 75
-    assert ADBEngine._combined_progress_percent(1000, 1000, 0) == 99
-    assert ADBEngine._combined_progress_percent(0, 0, 0) == 0
+    assert ADBEngine._combined_progress_percent(0, 0) == 0
+    assert ADBEngine._combined_progress_percent(0, 60) == 60
+    assert ADBEngine._combined_progress_percent(60, 0) == 60
+    assert ADBEngine._combined_progress_percent(60, 50) == 80
+    assert ADBEngine._combined_progress_percent(90, 100) == 99
 
     # Progress comes from ADB's real transfer output, not Windows disk-I/O
     # counters that behave differently for a local drive and a LAN path.
-    assert ADBEngine._parse_adb_progress_percent(
+    progress_details = ADBEngine._parse_adb_progress_details(
         "[ 42%] C:\\games\\asset.pak: 65%"
-    ) == 42
+    )
+    assert progress_details == (
+        42, r"C:\\games\\asset.pak", 65
+    )
+    single_file_details = ADBEngine._parse_adb_progress_details(
+        "[ 7%] C:\\games\\single.pak"
+    )
+    assert single_file_details == (
+        7, r"C:\\games\\single.pak", 7
+    )
     assert ADBEngine._parse_adb_progress_percent(
         "\x1b[2K[ 7%] asset.pak"
     ) == 7
@@ -529,15 +539,17 @@ def test_paths_and_ui():
     push_method = engine_source[wait_start:engine_source.index("@Slot(str, str, str)", wait_start)]
     assert "monitor_adb_io(" not in push_method
     assert "report_progress_line(fragment)" in push_method
-    assert "self._parse_adb_progress_percent(line)" in push_method
+    assert "self._parse_adb_progress_details(line)" in push_method
     assert "def _parse_adb_progress_percent(line)" in engine_source
+    assert "def _parse_adb_progress_details(line)" in engine_source
     assert "def _parse_adb_transfer_speed(line)" in engine_source
     stderr_start = engine_source.index("stderr_reader.start()", wait_start)
     wait_call = engine_source.index("return_code = process.wait()", wait_start)
     assert stderr_start < wait_call
     assert "stderr_reader.join(timeout=2.0)" in engine_source
     assert "def _combined_progress_percent(" in engine_source
-    assert "min(int(transferred * 100 / total_bytes), 99)" in engine_source
+    assert "combined = offset + ((100 - offset) * attempt / 100.0)" in engine_source
+    assert "return max(offset, min(int(combined), 99))" in engine_source
     assert "self._combined_progress_percent(" in engine_source
     assert "time.time_ns()" in engine_source
     assert engine_source.index(
