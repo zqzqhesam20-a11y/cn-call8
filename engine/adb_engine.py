@@ -975,6 +975,7 @@ class ADBEngine(QObject):
                 now = time.monotonic()
                 with progress_lock:
                     if overall_percent is not None:
+                        was_native_seen = progress_state["native_seen"]
                         progress_state["native_seen"] = True
                         progress_state["native_percent"] = max(
                             progress_state["native_percent"], overall_percent
@@ -983,10 +984,16 @@ class ADBEngine(QObject):
                             progress_offset_percent,
                             progress_state["native_percent"]
                         )
-                        progress_state["native_display_percent"] = max(
-                            progress_state["native_display_percent"],
-                            combined_percent
-                        )
+                        if was_native_seen:
+                            progress_state["native_display_percent"] = max(
+                                progress_state["native_display_percent"],
+                                combined_percent
+                            )
+                        else:
+                            # Discard any early process-I/O estimate when ADB's
+                            # authoritative overall percentage first arrives.
+                            progress_state["native_display_percent"] = combined_percent
+                            progress_state["last_percent"] = combined_percent
 
                     samples = progress_state["speed_samples"]
                     if measured_speed is not None and measured_speed > 0:
