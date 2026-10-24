@@ -1493,6 +1493,77 @@ class ADBEngine(QObject):
             daemon=True
         ).start()
 
+    @Slot(str, str, str)
+    def install_if_missing(self, device, apk, package_id):
+        """Install MT Manager only when it is not already present."""
+        self._cancel_event.clear()
+
+        def worker():
+            try:
+                check = self._run(
+                    ["-s", device, "shell", "pm", "path", package_id],
+                    timeout=30
+                )
+                check_output = (
+                    str(check.stdout or "")
+                    + "\n"
+                    + str(check.stderr or "")
+                ).strip()
+                is_installed = (
+                    check.returncode == 0
+                    and any(
+                        line.strip().startswith("package:")
+                        for line in str(check.stdout or "").splitlines()
+                    )
+                )
+
+                if is_installed:
+                    self.statusChanged.emit("MT Manager مثبت مسبقًا")
+                    self.finished.emit(True, "MT Manager مثبت مسبقًا")
+                    return
+
+                if not os.path.isfile(apk):
+                    self.finished.emit(
+                        False,
+                        "ملف MT Manager غير موجود أو مسار الشبكة غير متاح: "
+                        + str(apk)
+                    )
+                    return
+
+                self.statusChanged.emit("جاري تثبيت MT Manager قبل النسخ...")
+                result = self._run_install_command(
+                    ["-s", device, "install", "-r", apk],
+                    timeout=3600
+                )
+                output = (
+                    str(result.stdout or "").strip()
+                    + "\n"
+                    + str(result.stderr or "").strip()
+                ).strip()
+                print("ADB INSTALL MT MANAGER:", output or check_output)
+
+                if result.returncode == 0:
+                    self.statusChanged.emit("تم تجهيز MT Manager")
+                    self.finished.emit(True, "تم تثبيت MT Manager قبل النسخ")
+                else:
+                    self.finished.emit(
+                        False,
+                        "تعذر تثبيت MT Manager قبل النسخ: "
+                        + (output or check_output or "فشل أمر ADB install")
+                    )
+
+            except Exception as e:
+                print("MT MANAGER PRE-INSTALL ERROR:", e)
+                self.finished.emit(
+                    False,
+                    f"خطأ أثناء التحقق من MT Manager أو تثبيته: {e}"
+                )
+
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
+
     @Slot(str)
     def install(self, device, apk):
 

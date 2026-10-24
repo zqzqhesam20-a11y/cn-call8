@@ -86,6 +86,10 @@ def build_usb_source_root():
 
 
 
+def build_mt_manager_apk_path():
+    return build_server_source_root() / "تطبيقات للنسخ" / "MT_Manager_2.26.4.apk"
+
+
 class AppController(QObject):
 
     messageChanged = Signal(str)
@@ -99,6 +103,7 @@ class AppController(QObject):
     transferBatchChanged = Signal(list)
     deviceProgressChanged = Signal(str, int, str, str, str, str, str)
     operationFinished = Signal(str)
+    androidDataFallbackRequested = Signal(str, str, str, str)
     busyChanged = Signal(bool)
     usbChanged = Signal(str)
     destinationChanged = Signal(str)
@@ -393,16 +398,28 @@ class AppController(QObject):
             )
         )
 
+        preinstall_stage = (
+            operation["kind"] == "copy"
+            and operation.get("preinstall_mt_manager", False)
+            and not operation.get("mt_manager_preinstall_done", False)
+        )
+
         self._emit_operation_state()
         self._update_operation(
             serial,
             status="جاري التثبيت"
             if operation["kind"] == "install"
+            else "جاري فحص MT Manager"
+            if preinstall_stage
             else "جاري النسخ",
             operation_text="تثبيت التطبيق"
             if operation["kind"] == "install"
+            else "التحقق من MT Manager قبل النسخ"
+            if preinstall_stage
             else "نسخ بيانات اللعبة",
-            speed="--" if operation["kind"] == "install" else "0 B/s",
+            speed="--"
+            if operation["kind"] == "install" or preinstall_stage
+            else "0 B/s",
             eta="--"
         )
 
@@ -411,6 +428,12 @@ class AppController(QObject):
                 engine.install_apks(serial, operation["apk"])
             else:
                 engine.install(serial, operation["apk"])
+        elif preinstall_stage:
+            engine.install_if_missing(
+                serial,
+                operation["mt_manager_apk"],
+                operation.get("mt_manager_package", "bin.mt.plus")
+            )
         else:
             engine.push(
                 serial,
@@ -508,6 +531,34 @@ class AppController(QObject):
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _is_android_data_permission_denial(destination, raw_message):
+        target = str(destination or "").lower()
+        if "/android/data/" not in target and not target.endswith("/android/data"):
+            return False
+
+        lowered = str(raw_message or "").lower()
+        permission_markers = (
+            "permission denied",
+            "remote secure_mkdirs failed",
+            "read-only file system",
+            "operation not permitted",
+            "eacces",
+            "errno 13",
+        )
+        return any(marker in lowered for marker in permission_markers)
+
+    @staticmethod
+    def _root_fallback_destination(game_name):
+        folder = str(game_name or "GameData").strip()
+        for character in ('\\', '/', ':', '*', '?', '"', '<', '>', '|'):
+            folder = folder.replace(character, "_")
+        folder = folder.replace(" ", "_").strip("._")
+        if not folder:
+            folder = "GameData"
+        # Isolate fallback data in its own folder at the storage root.
+        return f"/sdcard/{folder}/"
+
     def _finished_for_device(self, serial, success, message):
         print(
             "FINISHED:",
@@ -520,9 +571,74 @@ class AppController(QObject):
         if operation is None or operation.get("completed"):
             return
 
-        if not success and operation.get("kind") == "copy":
+        preinstall_stage = (
+            operation.get("kind") == "copy"
+            and operation.get("preinstall_mt_manager", False)
+            and not operation.get("mt_manager_preinstall_done", False)
+        )
+        preinstall_stage_failed = False
+
+        if preinstall_stage and success:
+            engine = operation.get("engine")
+            if engine is None:
+                success = False
+                message = "تم فحص MT Manager لكن محرك النقل غير جاهز؛ لم يبدأ النسخ."
+            else:
+                operation["mt_manager_preinstall_done"] = True
+                operation["raw_error"] = ""
+                operation["error"] = ""
+                operation["status"] = "جاري النسخ"
+                operation["percent"] = 0
+                operation["operation"] = "تم تجهيز MT Manager؛ جاري نسخ بيانات اللعبة"
+                operation["speed"] = "0 B/s"
+                operation["eta"] = "--"
+                self._update_operation(
+                    serial,
+                    percent=0,
+                    status=operation["status"],
+                    operation_text=operation["operation"],
+                    speed=operation["speed"],
+                    eta=operation["eta"],
+                    error=""
+                )
+                engine.push(
+                    serial,
+                    operation["source"],
+                    operation["destination"]
+                )
+                return
+
+        if preinstall_stage and not success:
+            preinstall_stage_failed = True
             operation["raw_error"] = str(message or "")
-            message = self._device_copy_failure_summary(serial, operation, message)
+            message = (
+                "تعذر تثبيت MT Manager قبل النسخ؛ لم يبدأ نسخ اللعبة. "
+                + str(message or "")
+            )
+
+        request_root_fallback = (
+            not success
+            and not operation.get("cancelled", False)
+            and not preinstall_stage_failed
+            and operation.get("kind") == "copy"
+            and operation.get("mt_manager_preinstall_done", False)
+            and not operation.get("root_fallback_attempted", False)
+            and self._is_android_data_permission_denial(
+                operation.get("destination", ""),
+                message
+            )
+        )
+        fallback_destination = (
+            self._root_fallback_destination(operation.get("game", ""))
+            if request_root_fallback
+            else ""
+        )
+
+        if not success and operation.get("kind") == "copy":
+            if not preinstall_stage_failed:
+                operation["raw_error"] = str(message or "")
+                message = self._device_copy_failure_summary(serial, operation, message)
+            operation["awaiting_root_fallback"] = request_root_fallback
 
         operation["completed"] = True
         operation["status"] = (
@@ -541,6 +657,8 @@ class AppController(QObject):
             if operation["kind"] == "install"
             else "اكتمل النسخ"
             if success
+            else "بانتظار اختيار وجهة بديلة"
+            if request_root_fallback
             else "فشل النسخ"
         )
         operation["percent"] = 100 if success and operation["kind"] == "copy" else operation["percent"]
@@ -561,6 +679,72 @@ class AppController(QObject):
         self.messageChanged.emit(message)
         if operation.get("engine") is not None:
             operation["engine"] = None
+
+        if request_root_fallback:
+            reason = (
+                str(message)
+                + "\n\nرسالة ADB الأصلية:\n"
+                + str(operation.get("raw_error") or "")
+            )
+            self.androidDataFallbackRequested.emit(
+                serial,
+                str(operation.get("game", "")),
+                fallback_destination,
+                reason
+            )
+
+    @Slot(str, result=bool)
+    def copyToDeviceRoot(self, serial):
+        operation = self._active_operations.get(serial)
+        if operation is None or not operation.get("awaiting_root_fallback", False):
+            self.messageChanged.emit("لا يوجد طلب نسخ بديل معلّق لهذا الهاتف.")
+            return False
+
+        if not operation.get("mt_manager_preinstall_done", False):
+            self.messageChanged.emit(
+                "لم يتم تجهيز MT Manager بنجاح؛ أُلغي النسخ البديل."
+            )
+            return False
+
+        original_destination = operation.get(
+            "original_destination",
+            operation.get("destination", "")
+        )
+        destination = self._root_fallback_destination(operation.get("game", ""))
+        operation.update({
+            "original_destination": original_destination,
+            "destination": destination,
+            "root_fallback_attempted": True,
+            "awaiting_root_fallback": False,
+            "completed": False,
+            "status": "جاري النسخ إلى الجذر",
+            "percent": 0,
+            "operation": "نسخ إلى مجلد مستقل في جذر الذاكرة",
+            "speed": "0 B/s",
+            "eta": "--",
+            "error": "",
+            "raw_error": ""
+        })
+        operation.pop("result", None)
+        self.messageChanged.emit(
+            f"إعادة نسخ {operation.get('game', 'البيانات')} إلى {destination}"
+        )
+        self._start_operation(operation)
+        return True
+
+    @Slot(str, result=bool)
+    def declineRootFallback(self, serial):
+        operation = self._active_operations.get(serial)
+        if operation is None or not operation.get("awaiting_root_fallback", False):
+            return False
+
+        operation["awaiting_root_fallback"] = False
+        operation["completed"] = True
+        operation["status"] = "فشل"
+        operation["operation"] = "تم إلغاء النسخ إلى الجذر"
+        self._emit_operation_state()
+        self.messageChanged.emit("تم إلغاء النسخ إلى الجذر؛ لم يُجرَ نقل بديل.")
+        return True
 
     @Slot(result=list)
     def getADBDevices(self):
@@ -909,7 +1093,14 @@ class AppController(QObject):
                     "eta": "--",
                     "error": "",
                     "completed": False,
-                    "cancelled": False
+                    "cancelled": False,
+                    "preinstall_mt_manager": "/android/data/" in adb_destination.lower(),
+                    "mt_manager_preinstall_done": False,
+                    "mt_manager_apk": str(build_mt_manager_apk_path()),
+                    "mt_manager_package": ADB_PACKAGE_IDS["MT Manager"],
+                    "root_fallback_attempted": False,
+                    "awaiting_root_fallback": False,
+                    "original_destination": adb_destination
                 }
             )
             started += 1

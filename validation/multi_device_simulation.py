@@ -58,6 +58,10 @@ class FakeOperationEngine(QObject):
         self.serial = serial
         self.calls.append(("push", serial, source, destination))
 
+    def install_if_missing(self, serial, apk, package_id):
+        self.serial = serial
+        self.calls.append(("install_if_missing", serial, apk, package_id))
+
     def install(self, serial, apk):
         self.serial = serial
         self.calls.append(("install", serial, apk))
@@ -188,9 +192,20 @@ def test_busy_serial_and_idle_serial(controller):
     ]
     assert "SERIAL_B" in controller._active_operations
     assert any("عملية نقل قيد التنفيذ" in message for message in rejected)
+    # MT Manager is checked/installed before transfer on this phone.
+    b_engine = engine_for("SERIAL_B")
+    assert b_engine.calls[0][0] == "install_if_missing"
+    assert b_engine.calls[0][2].endswith(r"\تطبيقات للنسخ\MT_Manager_2.26.4.apk")
+    assert b_engine.calls[0][3] == "bin.mt.plus"
+    b_engine.finish(True, "MT Manager already installed")
     # The controller must pass the source root, not append '/.' and accidentally
     # let adb create a nested `saved` folder under an already-existing `Saved`.
-    assert engine_for("SERIAL_B").calls[-1][2] == str(game / "saved")
+    assert b_engine.calls[-1] == (
+        "push",
+        "SERIAL_B",
+        str(game / "saved"),
+        "/sdcard/Android/data/com.tencent.ig/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/"
+    )
 
 
 def test_adb_source_arguments_and_progress_offset():
@@ -372,6 +387,65 @@ def test_oem_permission_guidance():
     assert "لا يحاول التطبيق تعطيل حماية النظام" in help_text
 
 
+def test_mt_manager_preinstall_and_android_data_fallback():
+    controller = make_controller()
+    prompts = []
+    controller.androidDataFallbackRequested.connect(
+        lambda serial, game, destination, reason:
+        prompts.append((serial, game, destination, reason))
+    )
+    destination = "/sdcard/Android/data/com.tencent.ig/"
+    operation = dict(
+        rows(["SERIAL_A"])[0],
+        source="source-folder",
+        destination=destination,
+        preinstall_mt_manager=True,
+        mt_manager_preinstall_done=False,
+        mt_manager_apk=r"\\SERVER06\c$\العابي\تطبيقات للنسخ\MT_Manager_2.26.4.apk",
+        mt_manager_package="bin.mt.plus",
+        root_fallback_attempted=False,
+        awaiting_root_fallback=False,
+        original_destination=destination
+    )
+
+    controller._start_operation(operation)
+    install_engine = operation["engine"]
+    assert install_engine.calls == [
+        ("install_if_missing", "SERIAL_A", operation["mt_manager_apk"], "bin.mt.plus")
+    ]
+
+    install_engine.finish(True, "MT Manager already installed")
+    assert operation["mt_manager_preinstall_done"] is True
+    assert install_engine.calls[-1] == (
+        "push", "SERIAL_A", "source-folder", destination
+    )
+
+    install_engine.finish(
+        False, "remote secure_mkdirs failed: Permission denied"
+    )
+    assert operation["completed"] is True
+    assert operation["awaiting_root_fallback"] is True
+    assert len(prompts) == 1
+    assert prompts[0][0] == "SERIAL_A"
+    assert prompts[0][1] == "PUBG Mobile"
+    assert prompts[0][2] == "/sdcard/PUBG_Mobile/"
+    assert "Permission denied" in prompts[0][3]
+
+    assert controller.copyToDeviceRoot("SERIAL_A") is True
+    assert operation["destination"] == "/sdcard/PUBG_Mobile/"
+    assert operation["root_fallback_attempted"] is True
+    assert operation["completed"] is False
+    root_engine = operation["engine"]
+    assert root_engine.calls == [
+        ("push", "SERIAL_A", "source-folder", "/sdcard/PUBG_Mobile/")
+    ]
+
+    root_engine.finish(True, "fallback copy complete")
+    assert operation["completed"] is True
+    assert operation["status"] == "اكتمل"
+    assert operation["destination"] == "/sdcard/PUBG_Mobile/"
+
+
 def test_duplicate_completion(controller):
     operation = dict(rows(["SERIAL_A"])[0], source="src", destination="dst")
     controller._start_operation(operation)
@@ -507,6 +581,16 @@ def test_paths_and_ui():
     assert "deviceCopyHelpDialog.open()" in qml
     assert "deviceCopyHelpText" in qml
     assert "TransferWindow()" not in current
+    assert "def build_mt_manager_apk_path()" in current
+    assert '"MT_Manager_2.26.4.apk"' in current
+    assert "engine.install_if_missing(" in current
+    assert "def copyToDeviceRoot(self, serial):" in current
+    assert "androidDataFallbackRequested = Signal(str, str, str, str)" in current
+    assert "def install_if_missing(self, device, apk, package_id):" in engine_source
+    assert "function onAndroidDataFallbackRequested" in qml
+    assert 'text: "نسخ إلى الجذر"' in qml
+    assert "appController.copyToDeviceRoot(serial)" in qml
+    assert "نسخ إلى مجلد مستقل في جذر الذاكرة" in current
 
     # Regression checks for the repaired lifecycle and physical source paths.
     assert 'return Path(r"D:\\games")' in current
@@ -636,6 +720,7 @@ def run_once():
     test_install_operations(make_controller())
     test_pause_resume_operations()
     test_oem_permission_guidance()
+    test_mt_manager_preinstall_and_android_data_fallback()
     test_duplicate_completion(make_controller())
     test_process_ownership()
     test_paths_and_ui()
