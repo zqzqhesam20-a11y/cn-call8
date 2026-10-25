@@ -208,10 +208,12 @@ jobs:
           }
           if (-not (Test-Path -LiteralPath $adb -PathType Leaf)) { throw 'Bundled ADB tools are missing.' }
 
-          $rawQml = @(Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter '*.qml')
+          # Qt's own QML controls remain required runtime files; reject app QML copied loose outside PySide6.
+          $looseAppQml = @(Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter '*.qml' |
+            Where-Object { $_.FullName -notmatch '[\\/](PySide6[\\/](Qt[\\/])?qml)[\\/]' })
           $rawGamesJson = @(Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter 'games.json')
-          if ($rawQml -or $rawGamesJson) {
-            throw 'Raw QML/game config leaked into the frozen output instead of embedded resources.'
+          if ($looseAppQml -or $rawGamesJson) {
+            throw 'Application QML/game config leaked into the frozen output instead of embedded resources.'
           }
 
           Write-Host ("Verified self-contained onedir bundle: {0:N2} MB" -f ($bundleBytes / 1MB))
