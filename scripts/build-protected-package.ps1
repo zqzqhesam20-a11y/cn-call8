@@ -13,7 +13,7 @@ $pythonArch = & python -c "import struct; print(struct.calcsize('P') * 8)"
 if ($LASTEXITCODE -ne 0 -or $pythonArch.Trim() -ne "64") {
     throw "Protected build requires 64-bit Python."
 }
-python -c "import nuitka, PySide6; print('Nuitka:', nuitka.__version__); print('PySide6:', PySide6.__version__)"
+python -c "from importlib.metadata import version; import PySide6; print('Nuitka:', version('Nuitka')); print('PySide6:', PySide6.__version__)"
 if ($LASTEXITCODE -ne 0) { throw "Nuitka or PySide6 is unavailable." }
 
 $out = [System.IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
