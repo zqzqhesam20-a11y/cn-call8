@@ -289,7 +289,37 @@ jobs:
           }
           Write-Host 'FROZEN EMBEDDED-QML AND TRANSFER-PANEL SMOKE TEST: PASS' -ForegroundColor Green
 
-      - name: Install Inno Setup for high-compression installer
+      - name: Create portable onedir package as an immediate fallback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO'
+          $zip = Join-Path $PWD 'KAFIA_NET_CONTROL_PRO_SelfContained_Portable.zip'
+          if (-not (Test-Path -LiteralPath (Join-Path $bundleDir 'KAFIA_NET_CONTROL_PRO.exe') -PathType Leaf)) {
+            throw 'Self-contained application is missing before portable packaging.'
+          }
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $zip -CompressionLevel Optimal
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+            throw 'Portable self-contained package ZIP was not created.'
+          }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+          "SHA256  KAFIA_NET_CONTROL_PRO_SelfContained_Portable.zip  $hash" |
+            Set-Content -LiteralPath 'KAFIA_NET_CONTROL_PRO_SelfContained_Portable_SHA256.txt' -Encoding ascii
+          Write-Host ("Portable package size: {0:N2} MB" -f ((Get-Item -LiteralPath $zip).Length / 1MB))
+          Write-Host ("Portable package SHA256: {0}" -f $hash)
+
+      - name: Upload portable self-contained package fallback
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAFIA_NET_CONTROL_PRO-SelfContained-Portable-Onedir
+          path: |
+            KAFIA_NET_CONTROL_PRO_SelfContained_Portable.zip
+            KAFIA_NET_CONTROL_PRO_SelfContained_Portable_SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Install Inno Setup for standard-compression installer
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -312,7 +342,7 @@ jobs:
           DefaultGroupName=KAFIA NET CONTROL PRO
           OutputDir=installer
           OutputBaseFilename=KAFIA_NET_CONTROL_PRO_SelfContained_Setup
-          Compression=lzma2/ultra64
+          Compression=lzma2
           SolidCompression=yes
           ArchitecturesInstallIn64BitMode=x64compatible
           PrivilegesRequired=admin
