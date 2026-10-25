@@ -733,7 +733,7 @@ def test_paths_and_ui():
         assert loose_source_entry not in spec
 
     readme = Path("README.md").read_text(encoding="utf-8")
-    assert "does not use" in readme and "Python runtime" in readme
+    assert "does not need an external Python runtime" in readme
 
 
 def run_once():
