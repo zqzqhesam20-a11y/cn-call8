@@ -1,16 +1,12 @@
-# Compact PyInstaller spec for the KAFIA NET CONTROL PRO Qt/QML app.
-#
-# Avoid a broad all-package collection here: it copies every PySide extension,
-# Qt DLL, translation, and data file, including modules the app never uses.
-# PyInstaller's built-in PySide6 hooks collect native dependencies and QML
-# plugins/files for the imported QtQml and QtQuick modules.
+# Self-contained PyInstaller spec. Python, PySide6 and Qt runtime files are collected by PyInstaller.
+# UI/QML/images and game metadata are compiled into ui_resources_rc before this spec runs.
+# Do not copy source folders (engine/, ui/, qml/, assets/) as loose data files.
+
+import os
+
+resource_build_dir = os.path.abspath("build")
 
 datas = [
-    ("qml", "qml"),
-    ("assets", "assets"),
-    ("ui", "ui"),
-    ("engine", "engine"),
-    ("games.json", "."),
     ("platform-tools", "platform-tools"),
 ]
 
@@ -21,11 +17,12 @@ hiddenimports = [
     "PySide6.QtWidgets",
     "PySide6.QtQml",
     "PySide6.QtQuick",
+    "ui_resources_rc",
 ]
 
 a = Analysis(
     ["app_qml.py"],
-    pathex=["."],
+    pathex=[".", resource_build_dir],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -36,10 +33,7 @@ a = Analysis(
     noarchive=False,
 )
 
-# The Qt/QML hook scans the installed QML tree. This UI imports QtQuick,
-# QtQuick.Controls, and QtQuick.Layouts; these and their standard dependencies
-# are contained in QtQuick and QtQml. Keep the Qt namespace too, but drop
-# unrelated QML modules (for example QtCharts, Qt3D, QtWebEngine, QtMultimedia).
+
 def _keep_ui_bundle(entry):
     destination = str(entry[0]).replace("\\", "/")
     marker = "PySide6/qml/"
@@ -48,16 +42,14 @@ def _keep_ui_bundle(entry):
         if not module_path.startswith(("QtQuick/", "QtQml/", "Qt/")):
             return False
 
-    # The app's UI is Arabic; keep Arabic and English Qt translations only.
-    # Other-language .qm catalogs are optional and do not affect app resources.
     normalized = "/" + destination.lower().strip("/") + "/"
     if "/translations/" in normalized and destination.lower().endswith(".qm"):
         filename = destination.rsplit("/", 1)[-1].lower()
         language = filename[:-3].rsplit("_", 1)[-1]
         if language not in {"ar", "en", "en_us", "en_gb"}:
             return False
-
     return True
+
 
 a.datas = [entry for entry in a.datas if _keep_ui_bundle(entry)]
 a.binaries = [entry for entry in a.binaries if _keep_ui_bundle(entry)]

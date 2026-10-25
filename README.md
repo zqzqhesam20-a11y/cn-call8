@@ -1,29 +1,24 @@
-# KAFIA NET CONTROL PRO — cn-call8
+# KAFIA NET CONTROL PRO
 
-## Runtime and build protection
+## Standalone Windows installer
 
-The application now uses the local 64-bit Python 3.14 runtime at:
+The released Windows installer is built as a self-contained PyInstaller onedir application. It includes the required Python 3.14 runtime, PySide6/Qt binaries and plugins, application modules, ADB binaries, and compiled Qt resources for the QML interface, images, and games.json.
 
-    D:\games\py\python.exe
+**The installed application does not use `D:\games\py` as its Python runtime and does not need Python or PySide6 installed system-wide.** The app folder installed by the installer contains the runtime libraries it needs. It does not download or copy a Python runtime at launch.
 
-The game library and MT Manager APK source remain on the existing SERVER06 share; only the Python/Qt runtime path changed.
+## Paths intentionally retained
 
-The protected installer compiles application Python modules into Nuitka native extension modules (.pyd) and embeds active QML, game images and games.json as Qt binary resources. The installer does not include raw application .py files, .qml files, image files, or games.json. It includes compiled modules, the small Windows launchers, and the ADB binaries required by existing functionality.
+- The game library on SERVER06 remains the network source for the wireless/network source mode.
+- `D:\games` remains the optional local/USB game-library source. That is game data, not the Python runtime.
+- The MT Manager APK remains at the existing SERVER06 application-source path.
+- The installer includes ADB and its DLLs with the application so it does not require a separate ADB installation.
 
-This is source protection/obfuscation, not mathematically unbreakable encryption. A determined analyst may still reverse-engineer a local executable, and strings or behavior observable at runtime cannot be guaranteed secret.
+## Source protection
 
-IMPORTANT REPOSITORY LIMITATION: this GitHub repository is public, so source files committed here remain readable online even though the installer artifact is compiled. To keep the source private, the repository itself must be made private or the source must be moved out of a public repository. This build does not change repository visibility.
+The packaged output embeds active QML files, game images and `games.json` into Qt resources and does not copy those files as loose plaintext resources. Python modules are packed by PyInstaller rather than shipped as loose `.py` files. This reduces casual source access but is not unbreakable encryption; a determined analyst may reverse engineer a local executable.
 
-## Launch and compatibility
+The GitHub repository remains public, so files committed to the repository can still be read online. Protecting the distributed installer does not hide the repository's source history.
 
-- The launcher uses D:\games\py and does not download, install, or copy a Python runtime.
-- The runtime must be 64-bit Python 3.14 with compatible PySide6/Qt libraries (PySide6 6.10.1 or newer) and psutil.
-- The launcher runs a Qt startup smoke test before opening the UI.
-- The active QML UI and game metadata are loaded from compiled Qt resources. Development runs may still use source QML and games.json when no resource module is installed.
-- The existing Android/data MT Manager pre-install and permission-denial root-fallback flow remains part of the app.
+## Build validation
 
-## Build and CI
-
-- The Windows workflow runs regression simulation, compiles the protected installer, validates that source files did not leak into its payload, and uploads the protected installer.
-- The manual package workflow creates a protected ZIP with the same compiler/resource pipeline.
-- The external Python runtime is never copied into either artifact.
+The self-contained workflow performs regression simulations, builds the PyInstaller onedir bundle, verifies that Python and Qt runtime DLLs and ADB are present, rejects loose QML/game metadata in the output, runs frozen Qt and embedded-QML smoke tests, and builds a compressed Inno Setup installer.
