@@ -186,6 +186,8 @@ ApplicationWindow {
 
         Rectangle {
 
+            objectName: "mainSidebar"
+
             width: 240
 
             height: parent.height
@@ -1068,6 +1070,8 @@ ApplicationWindow {
 
                     Dashboard {
 
+                        objectName: "dashboardPage"
+
                         anchors.fill: parent
 
                     }
@@ -1194,6 +1198,7 @@ ApplicationWindow {
 
     Rectangle {
         id: transferPanel
+        objectName: "transferPanel"
 
         visible: window.transferDevices.length > 0 && !window.transferPanelDismissed
         anchors.right: parent.right

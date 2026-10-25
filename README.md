@@ -1,24 +1,14 @@
-# KAFIA NET CONTROL PRO
+# KAFIA NET CONTROL PRO — self-contained Windows build
 
-## Standalone Windows installer
+The released installer is built from the current branch using PyInstaller. Python, PySide6, Qt DLLs, Qt Quick/QML runtime modules, ADB, application logic, QML screens, game images and game metadata are bundled or embedded; the installed application does not need an external Python runtime under D:\games\py.
 
-The released Windows installer is built as a self-contained PyInstaller onedir application. It includes the required Python 3.14 runtime, PySide6/Qt binaries and plugins, application modules, ADB binaries, and compiled Qt resources for the QML interface, images, and games.json.
+The game library and MT Manager APK can still be read from the configured game source locations as part of their existing features. Those are application data sources, not a Python/Qt runtime dependency.
 
-**The installed application does not use `D:\games\py` as its Python runtime and does not need Python or PySide6 installed system-wide.** The app folder installed by the installer contains the runtime libraries it needs. It does not download or copy a Python runtime at launch.
+## UI and build verification
 
-## Paths intentionally retained
+- The build retains all PySide6 QML modules instead of pruning them to save package size.
+- The frozen-app smoke test checks the sidebar, games dashboard, and transfer panel in the embedded QML.
+- The smoke test emits a test transfer-list signal and verifies that the transfer panel actually becomes visible.
+- The installer is not published unless the frozen UI and transfer-panel smoke tests pass.
 
-- The game library on SERVER06 remains the network source for the wireless/network source mode.
-- `D:\games` remains the optional local/USB game-library source. That is game data, not the Python runtime.
-- The MT Manager APK remains at the existing SERVER06 application-source path.
-- The installer includes ADB and its DLLs with the application so it does not require a separate ADB installation.
-
-## Source protection
-
-The packaged output embeds active QML files, game images and `games.json` into Qt resources and does not copy those files as loose plaintext resources. Python modules are packed by PyInstaller rather than shipped as loose `.py` files. This reduces casual source access but is not unbreakable encryption; a determined analyst may reverse engineer a local executable.
-
-The GitHub repository remains public, so files committed to the repository can still be read online. Protecting the distributed installer does not hide the repository's source history.
-
-## Build validation
-
-The self-contained workflow performs regression simulations, builds the PyInstaller onedir bundle, verifies that Python and Qt runtime DLLs and ADB are present, rejects loose QML/game metadata in the output, runs frozen Qt and embedded-QML smoke tests, and builds a compressed Inno Setup installer.
+The installer is self-contained, but no locally distributed executable can be guaranteed impossible to reverse-engineer. The repository is public, so source files committed here remain readable on GitHub; compiled packaging protects the shipped artifact from simple source browsing, not from a determined analyst.

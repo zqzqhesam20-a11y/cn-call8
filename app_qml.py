@@ -1476,6 +1476,56 @@ def main():
 
     print("QML LOADED SUCCESSFULLY")
     if "--protected-build-smoke-test" in sys.argv:
+        root = engine.rootObjects()[0]
+        required_objects = ("mainSidebar", "dashboardPage", "transferPanel")
+        found_objects = {
+            name: root.findChild(QObject, name)
+            for name in required_objects
+        }
+        missing_objects = [
+            name for name, obj in found_objects.items() if obj is None
+        ]
+        if missing_objects:
+            print(
+                "UI_SMOKE_TEST_FAILED: missing QML objects: "
+                + ", ".join(missing_objects),
+                file=sys.stderr,
+            )
+            return 3
+
+        # Simulate the controller's real transfer-list signal. The panel is
+        # hidden while idle, so this verifies the signal that reveals it during
+        # a genuine copy/install operation.
+        controller.transferBatchChanged.emit([
+            {
+                "serial": "CI-SMOKE-DEVICE",
+                "model": "CI Smoke Device",
+                "game": "PUBG Mobile",
+                "kind": "copy",
+                "status": "جاري النسخ",
+                "percent": 25,
+                "operation": "اختبار ظهور لوحة النقل",
+                "speed": "1 MB/s",
+                "eta": "00:01",
+                "error": "",
+                "cancelled": False,
+                "raw_error": "",
+            }
+        ])
+        for _ in range(3):
+            app.processEvents()
+
+        panel = found_objects["transferPanel"]
+        if not bool(panel.property("visible")):
+            print(
+                "UI_SMOKE_TEST_FAILED: transfer panel did not become visible "
+                "after the transfer-list signal.",
+                file=sys.stderr,
+            )
+            return 4
+
+        print("DASHBOARD_UI_SMOKE_TEST: PASS")
+        print("TRANSFER_PANEL_SIGNAL_SMOKE_TEST: PASS")
         print("PROTECTED_BUILD_SMOKE_TEST: PASS")
         return 0
 

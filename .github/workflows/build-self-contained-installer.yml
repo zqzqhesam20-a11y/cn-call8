@@ -181,8 +181,9 @@ jobs:
           }
 
           $spec = Get-Content -LiteralPath 'build_full.spec' -Raw
-          if ($spec.Contains('collect_all(')) {
-            throw 'Optimized spec must not collect the entire PySide6 distribution.'
+          if ($spec.Contains('_keep_ui_bundle') -or
+              $spec.Contains('a.datas = [entry for entry in a.datas if')) {
+            throw 'The self-contained UI build must not prune PySide6 QML modules.'
           }
           foreach ($requiredText in @('COLLECT(', 'PySide6.QtQml', 'PySide6.QtQuick', '"ui_resources_rc"', '("platform-tools", "platform-tools")')) {
             if (-not $spec.Contains($requiredText)) {
@@ -250,7 +251,7 @@ jobs:
           }
           Write-Host 'FROZEN QT STARTUP SMOKE TEST: PASS' -ForegroundColor Green
 
-      - name: Run frozen embedded-QML smoke test
+      - name: Run frozen embedded-QML and transfer-panel smoke test
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
@@ -263,17 +264,30 @@ jobs:
           $psi.Arguments = '--protected-build-smoke-test'
           $psi.UseShellExecute = $false
           $psi.CreateNoWindow = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
           $psi.EnvironmentVariables['QT_QPA_PLATFORM'] = 'offscreen'
           $psi.EnvironmentVariables['QT_QUICK_BACKEND'] = 'software'
           $proc = [System.Diagnostics.Process]::Start($psi)
+
           if (-not $proc.WaitForExit(120000)) {
             try { $proc.Kill() } catch {}
-            throw 'Embedded-QML smoke test timed out after 120 seconds.'
+            throw 'Embedded-QML/transfer-panel smoke test timed out after 120 seconds.'
           }
+          $stdout = $proc.StandardOutput.ReadToEnd()
+          $stderr = $proc.StandardError.ReadToEnd()
+          if ($stdout) { Write-Host $stdout }
+          if ($stderr) { Write-Host $stderr }
           if ($proc.ExitCode -ne 0) {
-            throw "Embedded-QML smoke test failed with exit code $($proc.ExitCode)."
+            throw "Embedded-QML/transfer-panel smoke test failed with exit code $($proc.ExitCode)."
           }
-          Write-Host 'FROZEN EMBEDDED-QML SMOKE TEST: PASS' -ForegroundColor Green
+          if ($stdout -notmatch 'DASHBOARD_UI_SMOKE_TEST: PASS') {
+            throw 'Dashboard UI smoke-test marker was missing.'
+          }
+          if ($stdout -notmatch 'TRANSFER_PANEL_SIGNAL_SMOKE_TEST: PASS') {
+            throw 'Transfer panel did not pass its visibility/signal smoke test.'
+          }
+          Write-Host 'FROZEN EMBEDDED-QML AND TRANSFER-PANEL SMOKE TEST: PASS' -ForegroundColor Green
 
       - name: Install Inno Setup for high-compression installer
         shell: pwsh

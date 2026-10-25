@@ -645,6 +645,10 @@ def test_paths_and_ui():
     ) < engine_source.index('external_adb = Path(')
 
     assert "appController.refreshADBDevices()" in qml
+    assert 'objectName: "mainSidebar"' in qml
+    assert 'objectName: "dashboardPage"' in qml
+    assert 'objectName: "transferPanel"' in qml
+    assert "TRANSFER_PANEL_SIGNAL_SMOKE_TEST: PASS" in current
     # Device names must have explicit readable text and selection contrast.
     assert "id: deviceSelectionCheckBox" in qml
     assert "text: deviceSelectionCheckBox.text" in qml

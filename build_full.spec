@@ -34,25 +34,10 @@ a = Analysis(
 )
 
 
-def _keep_ui_bundle(entry):
-    destination = str(entry[0]).replace("\\", "/")
-    marker = "PySide6/qml/"
-    if marker in destination:
-        module_path = destination.split(marker, 1)[1]
-        if not module_path.startswith(("QtQuick/", "QtQml/", "Qt/")):
-            return False
-
-    normalized = "/" + destination.lower().strip("/") + "/"
-    if "/translations/" in normalized and destination.lower().endswith(".qm"):
-        filename = destination.rsplit("/", 1)[-1].lower()
-        language = filename[:-3].rsplit("_", 1)[-1]
-        if language not in {"ar", "en", "en_us", "en_gb"}:
-            return False
-    return True
-
-
-a.datas = [entry for entry in a.datas if _keep_ui_bundle(entry)]
-a.binaries = [entry for entry in a.binaries if _keep_ui_bundle(entry)]
+# Keep all Qt/PySide6 QML modules and translations. The released app uses
+# Qt Quick Controls and we explicitly favor UI completeness over a smaller
+# installer; missing QML modules can leave a window technically loaded but
+# with controls/pages absent at runtime.
 
 pyz = PYZ(a.pure)
 
