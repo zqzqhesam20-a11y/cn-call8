@@ -70,7 +70,10 @@ jobs:
           }
 
           @'
+          import os
           import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd()))
           import PySide6
           import psutil
           from engine.adb_engine import ADBEngine
