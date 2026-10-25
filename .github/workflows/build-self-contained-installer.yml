@@ -300,8 +300,35 @@ jobs:
           }
           if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
           Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $zip -CompressionLevel Optimal
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
             throw 'Portable self-contained package ZIP was not created.'
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            if ($archive.Entries.Count -lt 100) {
+              throw "Portable archive looks incomplete: only $($archive.Entries.Count) entries."
+            }
+            $requiredEntries = @(
+              'KAFIA_NET_CONTROL_PRO.exe',
+              '_internal/python314.dll',
+              '_internal/PySide6/Qt6Core.dll',
+              '_internal/platform-tools/adb.exe'
+            )
+            $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+            foreach ($requiredEntry in $requiredEntries) {
+              if ($entryNames -notcontains $requiredEntry) {
+                throw "Portable archive is missing required bundled file: $requiredEntry"
+              }
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+          $zipItem = Get-Item -LiteralPath $zip
+          if ($zipItem.Length -lt 50000000) {
+            throw "Portable ZIP is unexpectedly small: $($zipItem.Length) bytes."
           }
           $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
           "SHA256  KAFIA_NET_CONTROL_PRO_SelfContained_Portable.zip  $hash" |
