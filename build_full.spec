@@ -40,16 +40,27 @@ a = Analysis(
 # QtQuick.Controls, and QtQuick.Layouts; these and their standard dependencies
 # are contained in QtQuick and QtQml. Keep the Qt namespace too, but drop
 # unrelated QML modules (for example QtCharts, Qt3D, QtWebEngine, QtMultimedia).
-def _keep_ui_qml(entry):
+def _keep_ui_bundle(entry):
     destination = str(entry[0]).replace("\\", "/")
     marker = "PySide6/qml/"
-    if marker not in destination:
-        return True
-    module_path = destination.split(marker, 1)[1]
-    return module_path.startswith(("QtQuick/", "QtQml/", "Qt/"))
+    if marker in destination:
+        module_path = destination.split(marker, 1)[1]
+        if not module_path.startswith(("QtQuick/", "QtQml/", "Qt/")):
+            return False
 
-a.datas = [entry for entry in a.datas if _keep_ui_qml(entry)]
-a.binaries = [entry for entry in a.binaries if _keep_ui_qml(entry)]
+    # The app's UI is Arabic; keep Arabic and English Qt translations only.
+    # Other-language .qm catalogs are optional and do not affect app resources.
+    normalized = "/" + destination.lower().strip("/") + "/"
+    if "/translations/" in normalized and destination.lower().endswith(".qm"):
+        filename = destination.rsplit("/", 1)[-1].lower()
+        language = filename[:-3].rsplit("_", 1)[-1]
+        if language not in {"ar", "en", "en_us", "en_gb"}:
+            return False
+
+    return True
+
+a.datas = [entry for entry in a.datas if _keep_ui_bundle(entry)]
+a.binaries = [entry for entry in a.binaries if _keep_ui_bundle(entry)]
 
 pyz = PYZ(a.pure)
 
