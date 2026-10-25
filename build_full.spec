@@ -1,35 +1,34 @@
-﻿from PyInstaller.utils.hooks import collect_all
+# Compact PyInstaller spec for the KAFIA NET CONTROL PRO Qt/QML app.
+#
+# Intentionally avoid collect_all("PySide6"): it copies every PySide extension,
+# Qt DLL, translation, and data file, including modules the app never uses.
+# PyInstaller's built-in PySide6 hooks collect the native dependencies and the
+# QML plugins/files required by the imported QtQml/QtQuick modules.
 
-datas = []
-binaries = []
-hiddenimports = []
+datas = [
+    ("qml", "qml"),
+    ("assets", "assets"),
+    ("ui", "ui"),
+    ("engine", "engine"),
+    ("games.json", "."),
+    ("platform-tools", "platform-tools"),
+]
 
-for package in ["PySide6"]:
-    d, b, h = collect_all(package)
-    datas += d
-    binaries += b
-    hiddenimports += h
+hiddenimports = [
+    "PySide6",
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+]
 
 a = Analysis(
     ["app_qml.py"],
     pathex=["."],
-    binaries=binaries,
-    datas=datas + [
-        ("qml", "qml"),
-        ("assets", "assets"),
-        ("ui", "ui"),
-        ("engine", "engine"),
-        ("games.json", "."),
-        ("platform-tools", "platform-tools"),
-    ],
-    hiddenimports=hiddenimports + [
-        "PySide6",
-        "PySide6.QtCore",
-        "PySide6.QtGui",
-        "PySide6.QtWidgets",
-        "PySide6.QtQml",
-        "PySide6.QtQuick",
-    ],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
