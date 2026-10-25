@@ -187,7 +187,7 @@ jobs:
           Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
 
           [Run]
-          Filename: "{app}\KAFIA NET CONTROL PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+          Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
           '@ | Set-Content -LiteralPath 'installer.iss' -Encoding utf8
 
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
