@@ -16,13 +16,18 @@ from PySide6.QtWidgets import QApplication
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from engine.adb_engine import ADBEngine
+
 
 def load_controller():
     module = ModuleType("app_qml")
     module.__file__ = str(ROOT / "app_qml.py")
     sys.modules["app_qml"] = module
     source = Path(module.__file__).read_text(encoding="utf-8")
-    source = source[:source.index('\nprint("STARTING KAFIA NET CONTROL PRO")')]
+    marker = "\ndef main():"
+    if marker not in source:
+        raise AssertionError("Could not locate app_qml main entry marker.")
+    source = source.split(marker, 1)[0]
     exec(compile(source, module.__file__, "exec"), module.__dict__)
     return module
 
@@ -49,11 +54,16 @@ class FakeOperationEngine(QObject):
         self.serial = None
         self.calls = []
         self.cancelled = False
+        self.paused = False
         FakeOperationEngine.instances.append(self)
 
     def push(self, serial, source, destination):
         self.serial = serial
         self.calls.append(("push", serial, source, destination))
+
+    def install_if_missing(self, serial, apk, package_id):
+        self.serial = serial
+        self.calls.append(("install_if_missing", serial, apk, package_id))
 
     def install(self, serial, apk):
         self.serial = serial
@@ -65,6 +75,14 @@ class FakeOperationEngine(QObject):
 
     def cancel(self):
         self.cancelled = True
+
+    def pause(self):
+        self.paused = True
+        return True
+
+    def resume(self):
+        self.paused = False
+        return True
 
     def progress(self, percent, speed="--", eta="--"):
         self.progressChanged.emit(percent, speed, eta)
@@ -177,6 +195,86 @@ def test_busy_serial_and_idle_serial(controller):
     ]
     assert "SERIAL_B" in controller._active_operations
     assert any("عملية نقل قيد التنفيذ" in message for message in rejected)
+    # MT Manager is checked/installed before transfer on this phone.
+    b_engine = engine_for("SERIAL_B")
+    assert b_engine.calls[0][0] == "install_if_missing"
+    assert b_engine.calls[0][2].endswith(r"\تطبيقات للنسخ\MT_Manager_2.26.4.apk")
+    assert b_engine.calls[0][3] == "bin.mt.plus"
+    b_engine.finish(True, "MT Manager already installed")
+    # The controller must pass the source root, not append '/.' and accidentally
+    # let adb create a nested `saved` folder under an already-existing `Saved`.
+    assert b_engine.calls[-1] == (
+        "push",
+        "SERIAL_B",
+        str(game / "saved"),
+        "/sdcard/Android/data/com.tencent.ig/files/UE4Game/ShadowTrackerExtra/ShadowTrackerExtra/Saved/"
+    )
+
+
+def test_adb_source_arguments_and_progress_offset():
+    with TemporaryDirectory() as directory:
+        source = Path(directory) / "saved"
+        source.mkdir()
+        (source / "asset.pak").write_bytes(b"data")
+        nested = source / "Paks"
+        nested.mkdir()
+        args, target = ADBEngine._adb_source_plan(
+            source, "/sdcard/ShadowTrackerExtra/Saved"
+        )
+        # Case-insensitive Windows path semantics allow the local "saved"
+        # directory to be passed as "Saved", pushing it to the remote parent.
+        if (source.parent / "Saved").exists():
+            assert args == [str(source.parent / "Saved")]
+            assert target == "/sdcard/ShadowTrackerExtra"
+        else:
+            assert args == [str(source / "asset.pak"), str(nested)]
+            assert target == "/sdcard/ShadowTrackerExtra/Saved"
+
+        asset = source / "asset.pak"
+        file_args, file_target = ADBEngine._adb_source_plan(
+            asset, "/sdcard/ShadowTrackerExtra/Saved"
+        )
+        assert file_args == [str(asset)]
+        assert file_target == "/sdcard/ShadowTrackerExtra/Saved"
+
+        # A directory with a different name is pushed as its direct children.
+        different = source.parent / "different"
+        different.mkdir()
+        (different / "one.bin").write_bytes(b"1")
+        child_args, child_target = ADBEngine._adb_source_plan(
+            different, "/sdcard/ShadowTrackerExtra/Saved"
+        )
+        assert child_args == [str(different / "one.bin")]
+        assert child_target == "/sdcard/ShadowTrackerExtra/Saved"
+
+    assert ADBEngine._combined_progress_percent(1000, 600, 0) == 60
+    assert ADBEngine._combined_progress_percent(1000, 600, 150) == 75
+    assert ADBEngine._combined_progress_percent(1000, 1000, 0) == 99
+    assert ADBEngine._combined_progress_percent(0, 0, 0) == 0
+
+    assert ADBEngine._combined_native_progress_percent(0, 0) == 0
+    assert ADBEngine._combined_native_progress_percent(0, 42) == 42
+    assert ADBEngine._combined_native_progress_percent(42, 0) == 42
+    assert ADBEngine._combined_native_progress_percent(42, 50) == 71
+    assert ADBEngine._combined_native_progress_percent(90, 100) == 99
+
+    # Current ADB writes native progress rows to stdout for non-console runs.
+    parsed = ADBEngine._parse_adb_progress_details(
+        "[ 42%] C:\\games\\asset.pak: 65%"
+    )
+    assert parsed == (42, r"C:\games\asset.pak", 65)
+    single = ADBEngine._parse_adb_progress_details(
+        "[ 7%] C:\\games\\single.pak"
+    )
+    assert single == (7, r"C:\games\single.pak", 7)
+    assert ADBEngine._parse_adb_progress_details("Transfer started") == (
+        None, None, None
+    )
+    measured_speed = ADBEngine._parse_adb_transfer_speed(
+        "1 file pushed, 0 skipped. 10.0 MB/s (1048576 bytes in 0.100s)"
+    )
+    assert measured_speed is not None
+    assert abs(measured_speed - 10485760) < 1
 
 
 def test_failure_cancel_and_completion_isolation(controller):
@@ -197,6 +295,7 @@ def test_failure_cancel_and_completion_isolation(controller):
     assert controller._active_operations["SERIAL_B"]["status"] == "اكتمل"
     assert controller._active_operations["SERIAL_C"]["status"] == "اكتمل"
     assert not controller.operationBusy
+    assert controller._operation_state == "IDLE"
 
 
 def test_install_operations(controller):
@@ -224,6 +323,130 @@ def test_install_operations(controller):
     engine_for("SERIAL_C").finish(True, "C installed")
     assert controller._active_operations["SERIAL_B"]["error"] == "B install error"
     assert controller._active_operations["SERIAL_C"]["status"] == "اكتمل"
+
+
+def test_pause_resume_operations():
+    FakeOperationEngine.instances = []
+    controller = make_controller()
+    for serial in ("SERIAL_A", "SERIAL_B"):
+        controller._start_operation(
+            dict(rows([serial])[0], source="src", destination="dst")
+        )
+
+    pause_events = []
+    controller.transferPausedChanged.connect(pause_events.append)
+    controller.pauseTransfer()
+    assert controller._transfer_paused
+    assert engine_for("SERIAL_A").paused
+    assert engine_for("SERIAL_B").paused
+    assert pause_events[-1] is True
+
+    controller.resumeTransfer()
+    assert not controller._transfer_paused
+    assert not engine_for("SERIAL_A").paused
+    assert not engine_for("SERIAL_B").paused
+    assert pause_events[-1] is False
+
+    controller.cancelDevice("SERIAL_A")
+    controller.cancelDevice("SERIAL_B")
+    engine_for("SERIAL_A").finish(False, "cancelled")
+    engine_for("SERIAL_B").finish(False, "cancelled")
+
+
+def test_oem_permission_guidance():
+    controller = make_controller()
+    serial = "XIAOMI_SERIAL"
+    controller._device_info[serial] = {
+        "manufacturer": "Xiaomi",
+        "model": "Redmi Note"
+    }
+    operation = {
+        "serial": serial,
+        "kind": "copy",
+        "destination": "/sdcard/Android/data/com.test.game/",
+        "status": "فشل",
+        "percent": 0,
+        "operation": "فشل النسخ",
+        "speed": "--",
+        "eta": "--",
+        "error": "Permission denied",
+        "raw_error": "remote secure_mkdirs failed: Permission denied",
+        "completed": True,
+        "cancelled": False,
+    }
+    controller._active_operations[serial] = operation
+
+    summary = controller._device_copy_failure_summary(
+        serial, operation, operation["raw_error"]
+    )
+    assert "Android/data" in summary
+    assert "إرشادات الإصلاح" in summary
+
+    help_text = controller.deviceCopyHelp(serial)
+    assert "Xiaomi Redmi Note" in help_text
+    assert "USB debugging (Security settings)" in help_text
+    assert "Install via USB" in help_text
+    assert "remote secure_mkdirs failed: Permission denied" in help_text
+    assert "لا يحاول التطبيق تعطيل حماية النظام" in help_text
+
+
+def test_mt_manager_preinstall_and_android_data_fallback():
+    controller = make_controller()
+    prompts = []
+    controller.androidDataFallbackRequested.connect(
+        lambda serial, game, destination, reason:
+        prompts.append((serial, game, destination, reason))
+    )
+    destination = "/sdcard/Android/data/com.tencent.ig/"
+    operation = dict(
+        rows(["SERIAL_A"])[0],
+        source="source-folder",
+        destination=destination,
+        preinstall_mt_manager=True,
+        mt_manager_preinstall_done=False,
+        mt_manager_apk=r"\\SERVER06\c$\العابي\تطبيقات للنسخ\MT_Manager_2.26.4.apk",
+        mt_manager_package="bin.mt.plus",
+        root_fallback_attempted=False,
+        awaiting_root_fallback=False,
+        original_destination=destination
+    )
+
+    controller._start_operation(operation)
+    install_engine = operation["engine"]
+    assert install_engine.calls == [
+        ("install_if_missing", "SERIAL_A", operation["mt_manager_apk"], "bin.mt.plus")
+    ]
+
+    install_engine.finish(True, "MT Manager already installed")
+    assert operation["mt_manager_preinstall_done"] is True
+    assert install_engine.calls[-1] == (
+        "push", "SERIAL_A", "source-folder", destination
+    )
+
+    install_engine.finish(
+        False, "remote secure_mkdirs failed: Permission denied"
+    )
+    assert operation["completed"] is True
+    assert operation["awaiting_root_fallback"] is True
+    assert len(prompts) == 1
+    assert prompts[0][0] == "SERIAL_A"
+    assert prompts[0][1] == "PUBG Mobile"
+    assert prompts[0][2] == "/sdcard/PUBG_Mobile/"
+    assert "Permission denied" in prompts[0][3]
+
+    assert controller.copyToDeviceRoot("SERIAL_A") is True
+    assert operation["destination"] == "/sdcard/PUBG_Mobile/"
+    assert operation["root_fallback_attempted"] is True
+    assert operation["completed"] is False
+    root_engine = operation["engine"]
+    assert root_engine.calls == [
+        ("push", "SERIAL_A", "source-folder", "/sdcard/PUBG_Mobile/")
+    ]
+
+    root_engine.finish(True, "fallback copy complete")
+    assert operation["completed"] is True
+    assert operation["status"] == "اكتمل"
+    assert operation["destination"] == "/sdcard/PUBG_Mobile/"
 
 
 def test_duplicate_completion(controller):
@@ -325,7 +548,11 @@ def test_process_ownership():
 
 def test_paths_and_ui():
     current = Path("app_qml.py").read_text(encoding="utf-8")
-    head = subprocess.check_output(["git", "show", "HEAD:app_qml.py"], text=True)
+    head = subprocess.check_output(
+        ["git", "show", "HEAD:app_qml.py"],
+        encoding="utf-8",
+        errors="strict"
+    )
     for start, end in (
         ('        elif game_name == "PUBG Mobile":',
          '        elif game_name == "Call of Duty Mobile":'),
@@ -341,9 +568,172 @@ def test_paths_and_ui():
         engine_source[install_start:install_end]
     )
     qml = Path("qml/main.qml").read_text()
-    assert "model: window.transferDevices" in qml
+    # Frequent transferBatchChanged signals must patch stable rows in place;
+    # replacing a JavaScript-array ListView model resets contentY and scroll.
+    assert "model: transferDevicesModel" in qml
+    assert "function syncTransferDeviceModel(devices)" in qml
+    assert "transferDevicesModel.setProperty(" in qml
+    assert "transferDevicesModel.clear()" not in qml
+    assert "model: window.transferDevices" not in qml
     assert "onClicked: appController.cancelDevice" in qml
+    assert '"إيقاف مؤقت"' in qml
+    assert '"استئناف"' in qml
+    assert "appController.pauseTransfer()" in qml
+    assert "appController.resumeTransfer()" in qml
+    assert "إرشادات الإصلاح" in qml
+    assert "deviceCopyHelpDialog.open()" in qml
+    assert "deviceCopyHelpText" in qml
     assert "TransferWindow()" not in current
+    assert "def build_mt_manager_apk_path()" in current
+    assert '"MT_Manager_2.26.4.apk"' in current
+    assert "engine.install_if_missing(" in current
+    assert "def copyToDeviceRoot(self, serial):" in current
+    assert "androidDataFallbackRequested = Signal(str, str, str, str)" in current
+    assert "def install_if_missing(self, device, apk, package_id):" in engine_source
+    assert "function onAndroidDataFallbackRequested" in qml
+    assert 'text: "نسخ إلى الجذر"' in qml
+    assert "appController.copyToDeviceRoot(serial)" in qml
+    assert "نسخ إلى مجلد مستقل في جذر الذاكرة" in current
+
+    # Regression checks for the repaired lifecycle and physical source paths.
+    assert 'return Path(r"D:\\games")' in current
+    assert str(app_qml.build_usb_source_root()) == r"D:\games"
+    assert "source = build_usb_source_root()" in current
+    assert "if not source.is_dir():" in current
+    assert "self.adbDiscoveryCompleted.connect(self._apply_adb_devices)" in current
+    assert "def refreshADBDevices(self):" in current
+    assert "active = any(" in current
+    launch = current[current.index("def launchGame(self, game_name):"):]
+    launch = launch[:launch.index("package_id = ADB_PACKAGE_IDS.get(")]
+    assert "self.adb_engine.get_devices()" not in launch
+    assert "يرجى تحديد هاتف واحد على الأقل قبل تشغيل اللعبة." in launch
+
+    # Disconnected phones wait for reconnection and retry only unsynced files.
+    assert "def _device_is_connected(self, device):" in engine_source
+    assert "self._wait_for_device_reconnect(device)" in engine_source
+    assert "انقطع اتصال الهاتف. الرجاء إعادة توصيله لاستمرار النسخ..." in engine_source
+    assert '"--sync"' in engine_source
+    assert "تمت إعادة توصيل الهاتف" in engine_source
+
+    # Protect against ADB stderr pipe deadlocks and false 100% completion.
+    wait_start = engine_source.index("def _push_thread")
+    stderr_start = engine_source.index("stderr_reader.start()", wait_start)
+    stdout_start = engine_source.index("stdout_reader.start()", wait_start)
+    wait_call = engine_source.index("return_code = process.wait()", wait_start)
+    assert stderr_start < wait_call
+    assert stdout_start < wait_call
+    assert "stderr_reader.join(timeout=2.0)" in engine_source
+    assert "stdout_reader.join(timeout=2.0)" in engine_source
+    assert "stdout=subprocess.PIPE" in engine_source[wait_start:]
+    assert 'args=(process.stdout, stdout_chunks, "stdout")' in engine_source
+    push_method = engine_source[wait_start:engine_source.index("@Slot(str, str, str)", wait_start)]
+    assert "stdout=subprocess.PIPE" in push_method
+    assert "stdout=subprocess.DEVNULL" not in push_method
+    assert "def _parse_adb_progress_details(line)" in engine_source
+    assert "self._parse_adb_progress_details(line)" in engine_source
+    assert "def _parse_adb_transfer_speed(line)" in engine_source
+    assert "def _combined_progress_percent(" in engine_source
+    assert "min(int(transferred * 100 / total_bytes), 99)" in engine_source
+    assert "self._combined_progress_percent(" in engine_source
+    assert "def _combined_native_progress_percent(" in engine_source
+    assert "self._combined_native_progress_percent(" in engine_source
+    assert 'progress_state["native_display_percent"]' in engine_source
+    assert 'progress_state["native_bytes"]' not in engine_source
+    assert "time.time_ns()" in engine_source
+    assert engine_source.index(
+        'local_adb = BASE_DIR / "platform-tools" / "adb.exe"'
+    ) < engine_source.index('external_adb = Path(')
+
+    assert "appController.refreshADBDevices()" in qml
+    assert 'objectName: "mainSidebar"' in qml
+    assert 'objectName: "dashboardPage"' in qml
+    assert 'objectName: "transferPanel"' in qml
+    assert "TRANSFER_PANEL_SIGNAL_SMOKE_TEST: PASS" in current
+    # Device names must have explicit readable text and selection contrast.
+    assert "id: deviceSelectionCheckBox" in qml
+    assert "text: deviceSelectionCheckBox.text" in qml
+    assert 'deviceSelectionCheckBox.checked' in qml
+    assert '"#FFFFFF"' in qml
+    assert '"#DCE4F0"' in qml
+    assert '? "#153845"' in qml
+    assert 'border.color: deviceSelectionCheckBox.checked' in qml
+    assert "appController.getADBDevices()" not in qml
+    assert "if (appController.useWirelessSource())" in qml
+    assert "if (appController.useUsbSource())" in qml
+
+    # Shipping launchers must use the local Python runtime and stay ASCII-only.
+    launcher = Path("Start-KAFIANET-CONTROL-PRO.cmd").read_text(encoding="utf-8")
+    assert all(ord(char) < 128 for char in launcher)
+    assert "Launch-KAFIA-NET-CONTROL-PRO.vbs" in launcher
+    assert "wscript.exe" in launcher
+    hidden_launcher = Path("Launch-KAFIA-NET-CONTROL-PRO.vbs").read_text(encoding="utf-8")
+    assert all(ord(char) < 128 for char in hidden_launcher)
+    assert "Start-KAFIANET-CONTROL-PRO.ps1" in hidden_launcher
+    assert "shell.Run(command, 0, True)" in hidden_launcher
+
+    external_launcher = Path("Start-KAFIANET-CONTROL-PRO.ps1").read_text(
+        encoding="utf-8"
+    )
+    assert all(ord(char) < 128 for char in external_launcher)
+    assert "D:\\games\\py" in external_launcher
+    assert "SERVER06\\c$" not in external_launcher
+    assert "PYTHONHOME" in external_launcher
+    assert "PYTHONPATH" in external_launcher
+    assert "--qt-import-smoke-test" in external_launcher
+    assert "kafianet_external_runtime*.pyd" in external_launcher
+    # The VBS hides PowerShell itself; the Qt app process must not be
+    # created with a hidden window style or the desktop launch may appear blank.
+    assert "& $pythonExe -c $bootstrapCommand" in external_launcher
+    assert "$appProcess = Start-Process -FilePath $pythonExe" not in external_launcher
+    assert "Start-Process -FilePath $pythonExe" not in external_launcher
+    assert "-WindowStyle Hidden" not in external_launcher
+    assert "WScript.Shell" in external_launcher
+    assert "Invoke-WebRequest" not in external_launcher
+    assert "pip install" not in external_launcher
+    assert "vc_redist" not in external_launcher
+
+    bootstrap = Path("kafianet_external_runtime.py").read_text(encoding="utf-8")
+    runtime_root = 'Path(r"D:\\games\\py")'
+    assert runtime_root in bootstrap
+    assert "SERVER06\\c$" not in bootstrap
+    assert "os.add_dll_directory" in bootstrap
+    assert "QT_QPA_PLATFORM_PLUGIN_PATH" in bootstrap
+    assert 'importlib.import_module("app_qml")' in bootstrap
+    assert "from PySide6.QtWidgets import QApplication" in current
+    assert "QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS" in current
+    assert "pyside_parts < (6, 10, 1)" in current
+    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    assert "PySide6>=6.10.1,<7" in requirements
+
+    workflow = Path(
+        ".github/workflows/build-self-contained-installer.yml"
+    ).read_text(encoding="utf-8")
+    spec = Path("build_full.spec").read_text(encoding="utf-8")
+
+    # Only the self-contained installer workflow publishes a release build.
+    assert "PyInstaller" in workflow
+    assert "pyside6-rcc" in workflow
+    assert "ui_resources_rc" in workflow
+    assert "python314.dll" in workflow
+    assert "Qt6Core.dll" in workflow
+    assert "--protected-build-smoke-test" in workflow
+    assert "KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe" in workflow
+    assert "D:\\games\\py" not in workflow
+
+    # Loose application sources are embedded instead of copied as data.
+    assert '"ui_resources_rc"' in spec
+    assert '("platform-tools", "platform-tools")' in spec
+    for loose_source_entry in (
+        '("qml", "qml")',
+        '("engine", "engine")',
+        '("ui", "ui")',
+        '("assets", "assets")',
+        '("games.json", ".")',
+    ):
+        assert loose_source_entry not in spec
+
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "does not need an external Python runtime" in readme
 
 
 def run_once():
@@ -352,8 +742,12 @@ def run_once():
     test_zero_selection(controller)
     test_independent_operations(controller)
     test_busy_serial_and_idle_serial(make_controller())
+    test_adb_source_arguments_and_progress_offset()
     test_failure_cancel_and_completion_isolation(make_controller())
     test_install_operations(make_controller())
+    test_pause_resume_operations()
+    test_oem_permission_guidance()
+    test_mt_manager_preinstall_and_android_data_fallback()
     test_duplicate_completion(make_controller())
     test_process_ownership()
     test_paths_and_ui()

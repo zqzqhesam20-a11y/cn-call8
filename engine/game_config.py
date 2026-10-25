@@ -6,14 +6,34 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_FILE = BASE_DIR / "games.json"
 
 
+def _load_embedded_games():
+    try:
+        import ui_resources_rc
+        from PySide6.QtCore import QFile, QIODevice
+    except ImportError:
+        return None
+
+    embedded_file = QFile(":/games.json")
+    if not embedded_file.open(QIODevice.OpenModeFlag.ReadOnly):
+        return None
+
+    try:
+        payload = bytes(embedded_file.readAll()).decode("utf-8-sig")
+        return json.loads(payload)
+    finally:
+        embedded_file.close()
+
+
 def load_games():
+    embedded = _load_embedded_games()
+    if embedded is not None:
+        return embedded
 
     with open(
         CONFIG_FILE,
         "r",
         encoding="utf-8"
     ) as file:
-
         return json.load(file)
 
 

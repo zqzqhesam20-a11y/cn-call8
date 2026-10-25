@@ -1,12 +1,42 @@
 import sys
 import os
+import threading
 from pathlib import Path
+
+# Keep Arabic diagnostics from crashing when launched with a legacy Windows
+# console code page. Packaged GUI builds may have no console streams at all.
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
 
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
 
-from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer, QUrl
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
+
+# CI/runtime smoke test: importing QtWidgets alone is insufficient because
+# Qt's platform plugins are loaded when QApplication is constructed.
+# Build verification invokes this mode against the frozen executable.
+if "--qt-import-smoke-test" in sys.argv:
+    pyside_version = getattr(__import__("PySide6"), "__version__", "0.0.0")
+    print("PYTHON_RUNTIME:", sys.executable)
+    print("PYSIDE6_VERSION:", pyside_version)
+    try:
+        pyside_parts = tuple(int(part) for part in pyside_version.split(".")[:3])
+    except (TypeError, ValueError):
+        pyside_parts = (0, 0, 0)
+    if pyside_parts < (6, 10, 1):
+        raise RuntimeError(
+            "Python 3.14 requires PySide6 6.10.1 or newer; "
+            f"found {pyside_version}."
+        )
+    app = QApplication([])
+    print("QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS")
+    sys.exit(0)
 
 from engine.transfer_engine import TransferEngine
 from engine.adb_engine import ADBEngine
@@ -56,6 +86,10 @@ def build_usb_source_root():
 
 
 
+def build_mt_manager_apk_path():
+    return build_server_source_root() / "تطبيقات للنسخ" / "MT_Manager_2.26.4.apk"
+
+
 class AppController(QObject):
 
     messageChanged = Signal(str)
@@ -64,14 +98,17 @@ class AppController(QObject):
     transferEtaChanged = Signal(str)
     transferFinished = Signal(bool, str)
     operationStateChanged = Signal(str)
+    transferPausedChanged = Signal(bool)
     operationRejected = Signal(str)
     transferBatchChanged = Signal(list)
     deviceProgressChanged = Signal(str, int, str, str, str, str, str)
     operationFinished = Signal(str)
+    androidDataFallbackRequested = Signal(str, str, str, str)
     busyChanged = Signal(bool)
     usbChanged = Signal(str)
     destinationChanged = Signal(str)
     adbDevicesChanged = Signal(list)
+    adbDiscoveryCompleted = Signal(list)
 
     def __init__(self):
         super().__init__()
@@ -130,26 +167,47 @@ class AppController(QObject):
         self._active_operations = {}
         self._operation_state = "IDLE"
         self._operation_busy = False
+        self._transfer_paused = False
         self._device_info = {}
 
         self.current_source = "WIRELESS"
-
-    @Slot()
-    def useWirelessSource(self):
-        self.current_source = "WIRELESS"
-        self.source_root = build_server_source_root()
-        print("SOURCE SELECTED: WIRELESS", self.source_root)
-
-    @Slot()
-    def useUsbSource(self):
-        self.current_source = "USB"
-        self.source_root = Path(r"D:\games") / SERVER_GAMES_FOLDER
-        print("SOURCE SELECTED: USB", self.source_root)
-
-
+        self._adb_discovery_lock = threading.Lock()
+        self._adb_discovery_thread = None
+        self.adbDiscoveryCompleted.connect(self._apply_adb_devices)
         print("CONTROLLER READY")
         print("SOURCE:", self.source_root)
         print("DEST:", self.destination_root)
+
+    @Slot(result=bool)
+    def useWirelessSource(self):
+        source = build_server_source_root()
+        if not source.is_dir():
+            self.messageChanged.emit(
+                f"تعذر الوصول إلى مصدر الشبكة: {source}"
+            )
+            return False
+
+        self.current_source = "WIRELESS"
+        self.source_root = source
+        self.messageChanged.emit(f"تم اختيار مصدر الشبكة: {source}")
+        print("SOURCE SELECTED: WIRELESS", self.source_root)
+        return True
+
+    @Slot(result=bool)
+    def useUsbSource(self):
+        source = build_usb_source_root()
+        if not source.is_dir():
+            self.messageChanged.emit(
+                f"مجلد USB غير موجود أو غير متاح: {source}"
+            )
+            return False
+
+        self.current_source = "USB"
+        self.source_root = source
+        self.messageChanged.emit(f"تم اختيار مصدر USB: {source}")
+        print("SOURCE SELECTED: USB", self.source_root)
+        return True
+
 
 
     def _transfer_progress(self, percent, speed, eta):
@@ -229,6 +287,10 @@ class AppController(QObject):
             self._operation_busy = busy
             self.busyChanged.emit(busy)
 
+        if not busy and self._transfer_paused:
+            self._transfer_paused = False
+            self.transferPausedChanged.emit(False)
+
         self.operationStateChanged.emit(state)
 
     def _reject_operation(self, message):
@@ -248,6 +310,7 @@ class AppController(QObject):
                 "speed": operation.get("speed", "--"),
                 "eta": operation.get("eta", "--"),
                 "error": operation.get("error", ""),
+                "raw_error": operation.get("raw_error", ""),
                 "cancelled": operation.get("cancelled", False)
             }
             for operation in self._active_operations.values()
@@ -293,9 +356,19 @@ class AppController(QObject):
 
     def _emit_operation_state(self):
         self.transferBatchChanged.emit(self._operation_rows())
-        self._set_operation_state(
-            "ACTIVE" if self._active_operations else "IDLE"
+        active = any(
+            not operation.get("completed", False)
+            for operation in self._active_operations.values()
         )
+        self._set_operation_state("ACTIVE" if active else "IDLE")
+
+    def _operation_status_changed(self, serial, message):
+        self._update_operation(
+            serial,
+            status=message,
+            operation_text=message
+        )
+        self.messageChanged.emit(message)
 
     def _start_operation(self, operation):
         serial = operation["serial"]
@@ -314,11 +387,7 @@ class AppController(QObject):
         )
         engine.statusChanged.connect(
             lambda message, s=serial:
-            self._update_operation(
-                s,
-                status=message,
-                operation_text=message
-            )
+            self._operation_status_changed(s, message)
         )
         engine.finished.connect(
             lambda success, message, s=serial:
@@ -329,16 +398,28 @@ class AppController(QObject):
             )
         )
 
+        preinstall_stage = (
+            operation["kind"] == "copy"
+            and operation.get("preinstall_mt_manager", False)
+            and not operation.get("mt_manager_preinstall_done", False)
+        )
+
         self._emit_operation_state()
         self._update_operation(
             serial,
             status="جاري التثبيت"
             if operation["kind"] == "install"
+            else "جاري فحص MT Manager"
+            if preinstall_stage
             else "جاري النسخ",
             operation_text="تثبيت التطبيق"
             if operation["kind"] == "install"
+            else "التحقق من MT Manager قبل النسخ"
+            if preinstall_stage
             else "نسخ بيانات اللعبة",
-            speed="--" if operation["kind"] == "install" else "0 B/s",
+            speed="--"
+            if operation["kind"] == "install" or preinstall_stage
+            else "0 B/s",
             eta="--"
         )
 
@@ -347,6 +428,12 @@ class AppController(QObject):
                 engine.install_apks(serial, operation["apk"])
             else:
                 engine.install(serial, operation["apk"])
+        elif preinstall_stage:
+            engine.install_if_missing(
+                serial,
+                operation["mt_manager_apk"],
+                operation.get("mt_manager_package", "bin.mt.plus")
+            )
         else:
             engine.push(
                 serial,
@@ -356,6 +443,121 @@ class AppController(QObject):
 
     def _finished(self, success, message):
         self.messageChanged.emit(message)
+
+    def _device_copy_failure_summary(self, serial, operation, raw_message):
+        """Map common OEM/Android storage denials to a useful short message."""
+        if operation.get("kind") != "copy":
+            return raw_message
+
+        text = str(raw_message or "")
+        lowered = text.lower()
+        permission_markers = (
+            "permission denied",
+            "remote secure_mkdirs failed",
+            "read-only file system",
+            "operation not permitted",
+            "eacces",
+            "errno 13",
+        )
+        if not any(marker in lowered for marker in permission_markers):
+            return raw_message
+
+        destination = str(operation.get("destination", ""))
+        if "/android/data/" in destination.lower() or destination.lower().endswith("/android/data"):
+            return (
+                "الهاتف منع الكتابة داخل Android/data. "
+                "افتح «إرشادات الإصلاح» لمعرفة السبب والخطوات المناسبة."
+            )
+
+        return (
+            "الهاتف رفض الكتابة إلى وجهة النسخ. "
+            "افتح «إرشادات الإصلاح» لمعرفة خطوات التشخيص."
+        )
+
+    @Slot(str, result=str)
+    def deviceCopyHelp(self, serial):
+        operation = self._active_operations.get(serial, {})
+        info = self._device_info.get(serial, {})
+        model = str(info.get("model") or info.get("name") or "Android")
+        manufacturer = str(info.get("manufacturer") or "")
+        brand_text = (manufacturer + " " + model).strip()
+        brand_lower = (manufacturer + " " + model).lower()
+        destination = str(operation.get("destination", ""))
+        raw_error = str(operation.get("raw_error") or operation.get("error") or "")
+
+        lines = [
+            "الجهاز: " + brand_text,
+            "",
+            "1) افتح قفل الهاتف وأبقِ الشاشة مفتوحة. إذا ظهر طلب «السماح بتصحيح USB» لهذا الكمبيوتر، وافق عليه بعد التأكد أنك تثق بهذا الكمبيوتر.",
+            "2) افتح إعدادات المطوّر وتأكد من تفعيل USB debugging. افصل الكابل وأعد توصيله، ثم جرّب منفذًا وكابل بيانات آخر عند الحاجة.",
+        ]
+
+        if any(name in brand_lower for name in ("xiaomi", "redmi", "poco", "شاومي", "ريدمي")):
+            lines.extend([
+                "",
+                "شاومي / Redmi / POCO (MIUI أو HyperOS):",
+                "• الإعدادات > الإعدادات الإضافية > خيارات المطوّر > USB debugging.",
+                "• إذا كان الخيار موجودًا وكان إصدار النظام يطلبه، راجع USB debugging (Security settings) واقبل التحذير بعد قراءته. قد يتطلب النظام موافقة حساب Xiaomi أو شروطًا إضافية.",
+                "• خيار Install via USB يتعلق أساسًا بتثبيت APK؛ تفعيله وحده لا يمنح بالضرورة حق الكتابة إلى Android/data.",
+            ])
+        elif any(name in brand_lower for name in ("oneplus", "oppo", "realme", "ون بلس")):
+            lines.extend([
+                "",
+                "OnePlus / OPPO / realme:",
+                "• الإعدادات > إعدادات النظام (أو الإعدادات الإضافية) > خيارات المطوّر > USB debugging.",
+                "• وافق على طلب تصحيح USB على الهاتف. ويمكن ضبط USB default configuration على File transfer إذا كان اتصال USB نفسه غير مستقر.",
+            ])
+        else:
+            lines.extend([
+                "",
+                "الإعدادات العامة:",
+                "• خيارات المطوّر > USB debugging، ثم اقبل مفتاح RSA لهذا الكمبيوتر على شاشة الهاتف.",
+            ])
+
+        if "/android/data/" in destination.lower() or destination.lower().endswith("/android/data"):
+            lines.extend([
+                "",
+                "مهم بخصوص Android/data:",
+                "إذا كان الخطأ Permission denied أو remote secure_mkdirs failed، فقد يمنع إصدار Android أو واجهة الشركة الكتابة إلى هذا المسار عبر ADB. خيارات USB debugging لا تتجاوز هذا القيد دائمًا. لا يحاول التطبيق تعطيل حماية النظام أو استعمال صلاحيات root.",
+                "الحل الآمن هو استخدام طريقة نقل يسمح بها الهاتف/النظام، أو اختيار مجلد وجهة غير محمي إذا كانت اللعبة تدعم ذلك. إذا كانت اللعبة تشترط Android/data وكان النظام يمنع الكتابة إليه، فسنعرض الرفض بدل الإبلاغ عن نجاح وهمي.",
+            ])
+
+        if raw_error:
+            lines.extend([
+                "",
+                "رسالة ADB الأصلية:",
+                raw_error,
+            ])
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _is_android_data_permission_denial(destination, raw_message):
+        target = str(destination or "").lower()
+        if "/android/data/" not in target and not target.endswith("/android/data"):
+            return False
+
+        lowered = str(raw_message or "").lower()
+        permission_markers = (
+            "permission denied",
+            "remote secure_mkdirs failed",
+            "read-only file system",
+            "operation not permitted",
+            "eacces",
+            "errno 13",
+        )
+        return any(marker in lowered for marker in permission_markers)
+
+    @staticmethod
+    def _root_fallback_destination(game_name):
+        folder = str(game_name or "GameData").strip()
+        for character in ('\\', '/', ':', '*', '?', '"', '<', '>', '|'):
+            folder = folder.replace(character, "_")
+        folder = folder.replace(" ", "_").strip("._")
+        if not folder:
+            folder = "GameData"
+        # Isolate fallback data in its own folder at the storage root.
+        return f"/sdcard/{folder}/"
 
     def _finished_for_device(self, serial, success, message):
         print(
@@ -368,6 +570,75 @@ class AppController(QObject):
         operation = self._active_operations.get(serial)
         if operation is None or operation.get("completed"):
             return
+
+        preinstall_stage = (
+            operation.get("kind") == "copy"
+            and operation.get("preinstall_mt_manager", False)
+            and not operation.get("mt_manager_preinstall_done", False)
+        )
+        preinstall_stage_failed = False
+
+        if preinstall_stage and success:
+            engine = operation.get("engine")
+            if engine is None:
+                success = False
+                message = "تم فحص MT Manager لكن محرك النقل غير جاهز؛ لم يبدأ النسخ."
+            else:
+                operation["mt_manager_preinstall_done"] = True
+                operation["raw_error"] = ""
+                operation["error"] = ""
+                operation["status"] = "جاري النسخ"
+                operation["percent"] = 0
+                operation["operation"] = "تم تجهيز MT Manager؛ جاري نسخ بيانات اللعبة"
+                operation["speed"] = "0 B/s"
+                operation["eta"] = "--"
+                self._update_operation(
+                    serial,
+                    percent=0,
+                    status=operation["status"],
+                    operation_text=operation["operation"],
+                    speed=operation["speed"],
+                    eta=operation["eta"],
+                    error=""
+                )
+                engine.push(
+                    serial,
+                    operation["source"],
+                    operation["destination"]
+                )
+                return
+
+        if preinstall_stage and not success:
+            preinstall_stage_failed = True
+            operation["raw_error"] = str(message or "")
+            message = (
+                "تعذر تثبيت MT Manager قبل النسخ؛ لم يبدأ نسخ اللعبة. "
+                + str(message or "")
+            )
+
+        request_root_fallback = (
+            not success
+            and not operation.get("cancelled", False)
+            and not preinstall_stage_failed
+            and operation.get("kind") == "copy"
+            and operation.get("mt_manager_preinstall_done", False)
+            and not operation.get("root_fallback_attempted", False)
+            and self._is_android_data_permission_denial(
+                operation.get("destination", ""),
+                message
+            )
+        )
+        fallback_destination = (
+            self._root_fallback_destination(operation.get("game", ""))
+            if request_root_fallback
+            else ""
+        )
+
+        if not success and operation.get("kind") == "copy":
+            if not preinstall_stage_failed:
+                operation["raw_error"] = str(message or "")
+                message = self._device_copy_failure_summary(serial, operation, message)
+            operation["awaiting_root_fallback"] = request_root_fallback
 
         operation["completed"] = True
         operation["status"] = (
@@ -386,6 +657,8 @@ class AppController(QObject):
             if operation["kind"] == "install"
             else "اكتمل النسخ"
             if success
+            else "بانتظار اختيار وجهة بديلة"
+            if request_root_fallback
             else "فشل النسخ"
         )
         operation["percent"] = 100 if success and operation["kind"] == "copy" else operation["percent"]
@@ -407,11 +680,108 @@ class AppController(QObject):
         if operation.get("engine") is not None:
             operation["engine"] = None
 
+        if request_root_fallback:
+            reason = (
+                str(message)
+                + "\n\nرسالة ADB الأصلية:\n"
+                + str(operation.get("raw_error") or "")
+            )
+            self.androidDataFallbackRequested.emit(
+                serial,
+                str(operation.get("game", "")),
+                fallback_destination,
+                reason
+            )
+
+    @Slot(str, result=bool)
+    def copyToDeviceRoot(self, serial):
+        operation = self._active_operations.get(serial)
+        if operation is None or not operation.get("awaiting_root_fallback", False):
+            self.messageChanged.emit("لا يوجد طلب نسخ بديل معلّق لهذا الهاتف.")
+            return False
+
+        if not operation.get("mt_manager_preinstall_done", False):
+            self.messageChanged.emit(
+                "لم يتم تجهيز MT Manager بنجاح؛ أُلغي النسخ البديل."
+            )
+            return False
+
+        original_destination = operation.get(
+            "original_destination",
+            operation.get("destination", "")
+        )
+        destination = self._root_fallback_destination(operation.get("game", ""))
+        operation.update({
+            "original_destination": original_destination,
+            "destination": destination,
+            "root_fallback_attempted": True,
+            "awaiting_root_fallback": False,
+            "completed": False,
+            "status": "جاري النسخ إلى الجذر",
+            "percent": 0,
+            "operation": "نسخ إلى مجلد مستقل في جذر الذاكرة",
+            "speed": "0 B/s",
+            "eta": "--",
+            "error": "",
+            "raw_error": ""
+        })
+        operation.pop("result", None)
+        self.messageChanged.emit(
+            f"إعادة نسخ {operation.get('game', 'البيانات')} إلى {destination}"
+        )
+        self._start_operation(operation)
+        return True
+
+    @Slot(str, result=bool)
+    def declineRootFallback(self, serial):
+        operation = self._active_operations.get(serial)
+        if operation is None or not operation.get("awaiting_root_fallback", False):
+            return False
+
+        operation["awaiting_root_fallback"] = False
+        operation["completed"] = True
+        operation["status"] = "فشل"
+        operation["operation"] = "تم إلغاء النسخ إلى الجذر"
+        self._emit_operation_state()
+        self.messageChanged.emit("تم إلغاء النسخ إلى الجذر؛ لم يُجرَ نقل بديل.")
+        return True
+
     @Slot(result=list)
     def getADBDevices(self):
+        # Synchronous compatibility entry point for non-UI callers/tests.
+        return self._apply_adb_devices(self.adb_engine.get_devices())
 
-        devices = self.adb_engine.get_devices()
+    @Slot()
+    def refreshADBDevices(self):
+        # ADB commands can stall on disconnected devices; never run discovery
+        # directly on the Qt UI thread.
+        with self._adb_discovery_lock:
+            if (
+                self._adb_discovery_thread is not None
+                and self._adb_discovery_thread.is_alive()
+            ):
+                return
 
+            self._adb_discovery_thread = threading.Thread(
+                target=self._discover_adb_devices,
+                name="KafiaNet-ADB-Discovery",
+                daemon=True
+            )
+            worker = self._adb_discovery_thread
+
+        worker.start()
+
+    def _discover_adb_devices(self):
+        try:
+            devices = self.adb_engine.get_devices()
+        except Exception as exc:
+            print("ADB DISCOVERY FAILED:", exc)
+            devices = []
+        self.adbDiscoveryCompleted.emit(devices)
+
+    @Slot(list)
+    def _apply_adb_devices(self, devices):
+        devices = list(devices or [])
         print("ADB DEVICES:", devices)
 
         available_serials = {
@@ -435,7 +805,6 @@ class AppController(QObject):
             )
 
         qml_devices = []
-
         for d in devices:
             qml_devices.append(
                 {
@@ -446,7 +815,6 @@ class AppController(QObject):
             )
 
         self.adbDevicesChanged.emit(qml_devices)
-
         return devices
 
 
@@ -497,7 +865,7 @@ class AppController(QObject):
         target_devices = list(self.selected_devices)
 
         if not target_devices and self.selected_device:
-            target_devices = []
+            target_devices = [self.selected_device]
 
         if not target_devices:
 
@@ -510,7 +878,7 @@ class AppController(QObject):
         # CHECK SOURCE
         # ==========================================
 
-        if not self.source_root.exists():
+        if not self.source_root.is_dir():
 
             print(
                 "SOURCE NOT FOUND:",
@@ -693,14 +1061,10 @@ class AppController(QObject):
         # START ADB TRANSFER
         # ==========================================
 
-        # Always push the CONTENTS of the selected source directory
-        # into the configured Android destination, never the source
-        # directory itself.
-        push_source = (
-            str(source) + "/."
-            if source.is_dir()
-            else str(source)
-        )
+        # Pass the source root unchanged. ADBEngine either transfers this
+        # directory to the exact remote parent (when names match) or passes
+        # direct children to the target root, avoiding nested Saved/saved.
+        push_source = str(source)
 
         started = 0
         for serial in target_devices:
@@ -729,7 +1093,14 @@ class AppController(QObject):
                     "eta": "--",
                     "error": "",
                     "completed": False,
-                    "cancelled": False
+                    "cancelled": False,
+                    "preinstall_mt_manager": "/android/data/" in adb_destination.lower(),
+                    "mt_manager_preinstall_done": False,
+                    "mt_manager_apk": str(build_mt_manager_apk_path()),
+                    "mt_manager_package": ADB_PACKAGE_IDS["MT Manager"],
+                    "root_fallback_attempted": False,
+                    "awaiting_root_fallback": False,
+                    "original_destination": adb_destination
                 }
             )
             started += 1
@@ -751,24 +1122,18 @@ class AppController(QObject):
         print("==============================")
 
         target_devices = list(self.selected_devices)
-
         if not target_devices and self.selected_device:
             target_devices = [self.selected_device]
 
         if not target_devices:
-            devices = self.adb_engine.get_devices()
-
-            if devices:
-                self.selected_device = devices[0].get(
-                    "serial",
-                    ""
-                )
-
-        if not self.selected_device:
-            self.messageChanged.emit(
-                "لا يوجد جهاز أندرويد متصل"
+            self._reject_operation(
+                "يرجى تحديد هاتف واحد على الأقل قبل تشغيل اللعبة."
             )
             return
+
+        # Launching supports one explicitly selected target. For multi-select,
+        # use the first selected serial consistently with selected_device.
+        self.selected_device = target_devices[0]
 
         package_id = ADB_PACKAGE_IDS.get(
             game_name
@@ -1008,12 +1373,9 @@ class AppController(QObject):
 
     @Slot()
     def pauseTransfer(self):
-        active = list(self._active_operations.items())
+        paused_any = False
 
-        if not active:
-            return
-
-        for serial, operation in active:
+        for serial, operation in list(self._active_operations.items()):
             if operation.get("completed", False):
                 continue
 
@@ -1022,18 +1384,24 @@ class AppController(QObject):
                 continue
 
             try:
-                engine.pause()
+                paused_any = bool(engine.pause()) or paused_any
             except Exception as e:
                 print("PAUSE ERROR:", serial, e)
 
+        if paused_any != self._transfer_paused:
+            self._transfer_paused = paused_any
+            self.transferPausedChanged.emit(paused_any)
+
+        if not paused_any:
+            self.messageChanged.emit(
+                "لا توجد عملية نقل نشطة يمكن إيقافها مؤقتًا الآن."
+            )
+
     @Slot()
     def resumeTransfer(self):
-        active = list(self._active_operations.items())
+        resumed_any = False
 
-        if not active:
-            return
-
-        for serial, operation in active:
+        for serial, operation in list(self._active_operations.items()):
             if operation.get("completed", False):
                 continue
 
@@ -1042,9 +1410,18 @@ class AppController(QObject):
                 continue
 
             try:
-                engine.resume()
+                resumed_any = bool(engine.resume()) or resumed_any
             except Exception as e:
                 print("RESUME ERROR:", serial, e)
+
+        if resumed_any and self._transfer_paused:
+            self._transfer_paused = False
+            self.transferPausedChanged.emit(False)
+
+        if not resumed_any:
+            self.messageChanged.emit(
+                "لا توجد عملية نقل متوقفة مؤقتًا لاستئنافها."
+            )
 
     @Slot()
     def cancelTransfer(self):
@@ -1072,51 +1449,91 @@ class AppController(QObject):
             engine.cancel()
 
 
-print("STARTING KAFIA NET CONTROL PRO")
+def main():
+    print("STARTING KAFIA NET CONTROL PRO")
 
-app = QApplication(sys.argv)
+    app = QApplication(sys.argv)
+    engine = QQmlApplicationEngine()
 
-engine = QQmlApplicationEngine()
+    try:
+        import ui_resources_rc
+        qml_entry = QUrl("qrc:/qml/main.qml")
+        print("LOADING EMBEDDED QML:", qml_entry.toString())
+    except ImportError:
+        qml_entry = QUrl.fromLocalFile(str(BASE_DIR / "qml" / "main.qml"))
+        print("LOADING SOURCE QML:", qml_entry.toString())
 
-controller = AppController()
+    controller = AppController()
+    engine.rootContext().setContextProperty("appController", controller)
+    engine.rootContext().setContextProperty("baseDirectory", str(BASE_DIR))
+    engine.load(qml_entry)
 
-engine.rootContext().setContextProperty(
-    "appController",
-    controller
-)
+    root_count = len(engine.rootObjects())
+    print("ROOT OBJECTS:", root_count)
+    if not root_count:
+        print("QML FAILED TO LOAD")
+        return 2
 
-engine.rootContext().setContextProperty(
-    "baseDirectory",
-    str(BASE_DIR)
-)
+    print("QML LOADED SUCCESSFULLY")
+    if "--protected-build-smoke-test" in sys.argv:
+        root = engine.rootObjects()[0]
+        required_objects = ("mainSidebar", "dashboardPage", "transferPanel")
+        found_objects = {
+            name: root.findChild(QObject, name)
+            for name in required_objects
+        }
+        missing_objects = [
+            name for name, obj in found_objects.items() if obj is None
+        ]
+        if missing_objects:
+            print(
+                "UI_SMOKE_TEST_FAILED: missing QML objects: "
+                + ", ".join(missing_objects),
+                file=sys.stderr,
+            )
+            return 3
 
-qml_file = BASE_DIR / "qml" / "main.qml"
+        # Simulate the controller's real transfer-list signal. The panel is
+        # hidden while idle, so this verifies the signal that reveals it during
+        # a genuine copy/install operation.
+        controller.transferBatchChanged.emit([
+            {
+                "serial": "CI-SMOKE-DEVICE",
+                "model": "CI Smoke Device",
+                "game": "PUBG Mobile",
+                "kind": "copy",
+                "status": "جاري النسخ",
+                "percent": 25,
+                "operation": "اختبار ظهور لوحة النقل",
+                "speed": "1 MB/s",
+                "eta": "00:01",
+                "error": "",
+                "cancelled": False,
+                "raw_error": "",
+            }
+        ])
+        for _ in range(3):
+            app.processEvents()
 
-print("LOADING:", qml_file)
+        panel = found_objects["transferPanel"]
+        if not bool(panel.property("visible")):
+            print(
+                "UI_SMOKE_TEST_FAILED: transfer panel did not become visible "
+                "after the transfer-list signal.",
+                file=sys.stderr,
+            )
+            return 4
 
-engine.load(
-    str(qml_file)
-)
+        print("DASHBOARD_UI_SMOKE_TEST: PASS")
+        print("TRANSFER_PANEL_SIGNAL_SMOKE_TEST: PASS")
+        print("PROTECTED_BUILD_SMOKE_TEST: PASS")
+        return 0
 
-print(
-    "ROOT OBJECTS:",
-    len(engine.rootObjects())
-)
+    print("STARTING QT EVENT LOOP")
+    exit_code = app.exec()
+    print("QT EVENT LOOP ENDED:", exit_code)
+    return exit_code
 
-if not engine.rootObjects():
 
-    print("QML FAILED TO LOAD")
-
-    sys.exit(-1)
-
-print("QML LOADED SUCCESSFULLY")
-print("STARTING QT EVENT LOOP")
-
-exit_code = app.exec()
-
-print(
-    "QT EVENT LOOP ENDED:",
-    exit_code
-)
-
-sys.exit(exit_code)
+if __name__ == "__main__":
+    raise SystemExit(main())

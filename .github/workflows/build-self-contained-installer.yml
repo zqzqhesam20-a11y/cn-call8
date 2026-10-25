@@ -1,0 +1,419 @@
+name: Build Bundled Self-Contained Windows Installer
+
+on:
+  push:
+    branches:
+      - fix/path-lifecycle-20261023
+      - main
+    paths:
+      - '.github/workflows/build-self-contained-installer.yml'
+      - 'app_qml.py'
+      - 'build_full.spec'
+      - 'requirements.txt'
+      - 'engine/**'
+      - 'qml/**'
+      - 'assets/**'
+      - 'ui/**'
+      - 'games.json'
+      - 'platform-tools/**'
+      - 'validation/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, smoke-test and compress optimized bundled app
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install 'PySide6==6.11.2' 'psutil>=7,<8' pyinstaller
+          if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed.' }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw 'Build environment has broken dependencies.' }
+
+      - name: Run branch regression simulation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python validation\multi_device_simulation.py
+          if ($LASTEXITCODE -ne 0) { throw 'Branch regression simulation failed.' }
+
+      - name: Validate app source imports
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $required = @(
+            'app_qml.py',
+            'build_full.spec',
+            'games.json',
+            'qml\main.qml',
+            'engine\adb_engine.py',
+            'engine\transfer_engine.py',
+            'engine\path_manager.py',
+            'engine\game_config.py',
+            'platform-tools\adb.exe',
+            'platform-tools\AdbWinApi.dll',
+            'platform-tools\AdbWinUsbApi.dll'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Required app file missing: $file"
+            }
+          }
+
+          @'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd()))
+          import PySide6, psutil
+          from engine.adb_engine import ADBEngine
+          from engine.transfer_engine import TransferEngine
+          from engine.path_manager import PathManager
+          from engine.game_config import get_game, find_game_folder
+          print("Python:", sys.version)
+          print("PySide6:", PySide6.__version__)
+          print("psutil:", psutil.__version__)
+          print("Application module imports: OK")
+          '@ | Set-Content -LiteralPath "$env:RUNNER_TEMP\validate_app.py" -Encoding utf8
+
+          python "$env:RUNNER_TEMP\validate_app.py"
+          if ($LASTEXITCODE -ne 0) { throw 'Application source import validation failed.' }
+
+      - name: Embed QML, images and game metadata into Qt resources
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path 'build' | Out-Null
+          $repoRoot = (Get-Location).Path.TrimEnd('\')
+          $resourceFiles = @()
+          $resourceFiles += Get-Item -LiteralPath 'games.json'
+          $resourceFiles += Get-ChildItem -LiteralPath 'qml' -Recurse -File -Filter '*.qml' |
+            Where-Object { $_.Name -ne 'main_login_test.qml' }
+          $resourceFiles += Get-ChildItem -LiteralPath 'assets' -Recurse -File
+
+          $qrcLines = [System.Collections.Generic.List[string]]::new()
+          $qrcLines.Add('<RCC>')
+          $qrcLines.Add('  <qresource prefix="/">')
+          foreach ($file in $resourceFiles) {
+            $relative = $file.FullName.Substring($repoRoot.Length).TrimStart('\', '/').Replace('\', '/')
+            $safeAlias = [System.Security.SecurityElement]::Escape($relative)
+            $safePath = [System.Security.SecurityElement]::Escape($file.FullName.Replace('\', '/'))
+            $qrcLines.Add(('    <file alias="{0}">{1}</file>' -f $safeAlias, $safePath))
+          }
+          $qrcLines.Add('  </qresource>')
+          $qrcLines.Add('</RCC>')
+          Set-Content -LiteralPath 'build\kafianet_resources.qrc' -Value $qrcLines -Encoding utf8
+
+          $rcc = (Get-Command 'pyside6-rcc' -ErrorAction Stop).Source
+          & $rcc 'build\kafianet_resources.qrc' -o 'build\ui_resources_rc.py'
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath 'build\ui_resources_rc.py' -PathType Leaf)) {
+            throw 'Failed to compile QML/assets/games.json into Qt resources.'
+          }
+          Write-Host ("Embedded Qt resource files: {0}" -f $resourceFiles.Count)
+
+      - name: Build compact onedir app with embedded Python and required Qt libraries
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m PyInstaller --clean --noconfirm build_full.spec
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
+
+          $bundleDir = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO'
+          $exe = Join-Path $bundleDir 'KAFIA_NET_CONTROL_PRO.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Self-contained app was not produced: $exe"
+          }
+
+          $bundleBytes = [double](Get-ChildItem -LiteralPath $bundleDir -File -Recurse | Measure-Object -Property Length -Sum).Sum
+          if ($bundleBytes -lt 50MB) {
+            throw "Bundle is unexpectedly small ($bundleBytes bytes); refusing to publish a possibly incomplete bundle."
+          }
+
+          Write-Host "Self-contained app directory: $bundleDir"
+          Write-Host ("Uncompressed bundle size: {0:N2} MB" -f ($bundleBytes / 1MB))
+          Write-Host ("EXE SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
+
+      - name: Verify the frozen bundle output
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO'
+          $exe = Join-Path $bundleDir 'KAFIA_NET_CONTROL_PRO.exe'
+
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Self-contained EXE is missing: $exe"
+          }
+          $bundleBytes = [double](Get-ChildItem -LiteralPath $bundleDir -File -Recurse | Measure-Object -Property Length -Sum).Sum
+          if ($bundleBytes -lt 50MB) {
+            throw "Bundle size is unexpectedly small: $bundleBytes bytes"
+          }
+
+          $spec = Get-Content -LiteralPath 'build_full.spec' -Raw
+          if ($spec.Contains('_keep_ui_bundle') -or
+              $spec.Contains('a.datas = [entry for entry in a.datas if')) {
+            throw 'The self-contained UI build must not prune PySide6 QML modules.'
+          }
+          foreach ($requiredText in @('COLLECT(', 'PySide6.QtQml', 'PySide6.QtQuick', '"ui_resources_rc"', '("platform-tools", "platform-tools")')) {
+            if (-not $spec.Contains($requiredText)) {
+              throw "PyInstaller spec is missing expected modules or resources: $requiredText"
+            }
+          }
+          if ($spec.Contains('("qml", "qml")') -or
+              $spec.Contains('("engine", "engine")') -or
+              $spec.Contains('("ui", "ui")') -or
+              $spec.Contains('("assets", "assets")') -or
+              $spec.Contains('("games.json", ".")')) {
+            throw 'Raw application QML/Python/images/game JSON must not be copied as loose files.'
+          }
+
+          $pythonRuntime = Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter 'python314.dll' | Select-Object -First 1
+          $qtCore = Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter 'Qt6Core.dll' | Select-Object -First 1
+          $qtQml = Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter 'Qt6Qml.dll' | Select-Object -First 1
+          $adb = Join-Path $bundleDir '_internal\platform-tools\adb.exe'
+          if (-not $pythonRuntime) { throw 'Bundled Python runtime (python314.dll) is missing.' }
+          if (-not $qtCore -or -not $qtQml) { throw 'Required Qt runtime DLLs are missing from the bundle.' }
+          if (-not (Test-Path -LiteralPath $adb -PathType Leaf)) {
+            $adb = Join-Path $bundleDir 'platform-tools\adb.exe'
+          }
+          if (-not (Test-Path -LiteralPath $adb -PathType Leaf)) { throw 'Bundled ADB tools are missing.' }
+
+          # Qt's own QML controls remain required runtime files; reject app QML copied loose outside PySide6.
+          $looseAppQml = @(Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter '*.qml' |
+            Where-Object { $_.FullName -notmatch '[\\/](PySide6[\\/](Qt[\\/])?qml)[\\/]' })
+          $rawGamesJson = @(Get-ChildItem -LiteralPath $bundleDir -Recurse -File -Filter 'games.json')
+          if ($looseAppQml -or $rawGamesJson) {
+            throw 'Application QML/game config leaked into the frozen output instead of embedded resources.'
+          }
+
+          Write-Host ("Verified self-contained onedir bundle: {0:N2} MB" -f ($bundleBytes / 1MB))
+          Write-Host ("Bundled Python: {0}" -f $pythonRuntime.FullName)
+          Write-Host ("Bundled Qt Core: {0}" -f $qtCore.FullName)
+          Write-Host 'NO EXTERNAL PYTHON RUNTIME PATH REQUIRED' -ForegroundColor Green
+          Write-Host ("EXE SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
+          Write-Host 'STATIC BUNDLE CHECK: PASS' -ForegroundColor Green
+
+      - name: Run frozen Qt startup smoke test
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO\KAFIA_NET_CONTROL_PRO.exe'
+
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $exe
+          $psi.Arguments = '--qt-import-smoke-test'
+          $psi.UseShellExecute = $false
+          $psi.CreateNoWindow = $true
+          $psi.EnvironmentVariables['QT_QPA_PLATFORM'] = 'offscreen'
+          $psi.EnvironmentVariables['QT_QUICK_BACKEND'] = 'software'
+          $proc = [System.Diagnostics.Process]::Start($psi)
+
+          if (-not $proc.WaitForExit(120000)) {
+            try { $proc.Kill() } catch {}
+            throw 'Frozen Qt startup smoke test timed out after 120 seconds.'
+          }
+          if ($proc.ExitCode -ne 0) {
+            throw "Frozen Qt startup smoke test failed with exit code $($proc.ExitCode)."
+          }
+          Write-Host 'FROZEN QT STARTUP SMOKE TEST: PASS' -ForegroundColor Green
+
+      - name: Run frozen embedded-QML and transfer-panel smoke test
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO\KAFIA_NET_CONTROL_PRO.exe'
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = $exe
+          $psi.Arguments = '--protected-build-smoke-test'
+          $psi.UseShellExecute = $false
+          $psi.CreateNoWindow = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.EnvironmentVariables['QT_QPA_PLATFORM'] = 'offscreen'
+          $psi.EnvironmentVariables['QT_QUICK_BACKEND'] = 'software'
+          $proc = [System.Diagnostics.Process]::Start($psi)
+
+          if (-not $proc.WaitForExit(120000)) {
+            try { $proc.Kill() } catch {}
+            throw 'Embedded-QML/transfer-panel smoke test timed out after 120 seconds.'
+          }
+          $stdout = $proc.StandardOutput.ReadToEnd()
+          $stderr = $proc.StandardError.ReadToEnd()
+          if ($stdout) { Write-Host $stdout }
+          if ($stderr) { Write-Host $stderr }
+          if ($proc.ExitCode -ne 0) {
+            throw "Embedded-QML/transfer-panel smoke test failed with exit code $($proc.ExitCode)."
+          }
+          if ($stdout -notmatch 'DASHBOARD_UI_SMOKE_TEST: PASS') {
+            throw 'Dashboard UI smoke-test marker was missing.'
+          }
+          if ($stdout -notmatch 'TRANSFER_PANEL_SIGNAL_SMOKE_TEST: PASS') {
+            throw 'Transfer panel did not pass its visibility/signal smoke test.'
+          }
+          Write-Host 'FROZEN EMBEDDED-QML AND TRANSFER-PANEL SMOKE TEST: PASS' -ForegroundColor Green
+
+      - name: Create portable onedir package as an immediate fallback
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleDir = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO'
+          $zip = Join-Path $PWD 'KAFIA_NET_CONTROL_PRO_SelfContained_Portable.zip'
+          if (-not (Test-Path -LiteralPath (Join-Path $bundleDir 'KAFIA_NET_CONTROL_PRO.exe') -PathType Leaf)) {
+            throw 'Self-contained application is missing before portable packaging.'
+          }
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath $zip -CompressionLevel Optimal
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+            throw 'Portable self-contained package ZIP was not created.'
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            if ($archive.Entries.Count -lt 100) {
+              throw "Portable archive looks incomplete: only $($archive.Entries.Count) entries."
+            }
+            $requiredEntries = @(
+              'KAFIA_NET_CONTROL_PRO.exe',
+              '_internal/python314.dll',
+              '_internal/PySide6/Qt6Core.dll',
+              '_internal/platform-tools/adb.exe'
+            )
+            $entryNames = @($archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') })
+            foreach ($requiredEntry in $requiredEntries) {
+              if ($entryNames -notcontains $requiredEntry) {
+                throw "Portable archive is missing required bundled file: $requiredEntry"
+              }
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+          $zipItem = Get-Item -LiteralPath $zip
+          if ($zipItem.Length -lt 50000000) {
+            throw "Portable ZIP is unexpectedly small: $($zipItem.Length) bytes."
+          }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+          "SHA256  KAFIA_NET_CONTROL_PRO_SelfContained_Portable.zip  $hash" |
+            Set-Content -LiteralPath 'KAFIA_NET_CONTROL_PRO_SelfContained_Portable_SHA256.txt' -Encoding ascii
+          Write-Host ("Portable package size: {0:N2} MB" -f ((Get-Item -LiteralPath $zip).Length / 1MB))
+          Write-Host ("Portable package SHA256: {0}" -f $hash)
+
+      - name: Upload portable self-contained package fallback
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAFIA_NET_CONTROL_PRO-SelfContained-Portable-Onedir
+          path: |
+            KAFIA_NET_CONTROL_PRO_SelfContained_Portable.zip
+            KAFIA_NET_CONTROL_PRO_SelfContained_Portable_SHA256.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Install Inno Setup for standard-compression installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+
+      - name: Build compressed self-contained installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path installer | Out-Null
+
+          @'
+          [Setup]
+          AppId={{DCE1D2AB-50A0-49A0-9ED1-8DA445E54C91}
+          AppName=KAFIA NET CONTROL PRO
+          AppVersion=1.4.0
+          AppPublisher=KAFIA NET CONTROL PRO
+          DefaultDirName={autopf}\KAFIA NET CONTROL PRO
+          DefaultGroupName=KAFIA NET CONTROL PRO
+          OutputDir=installer
+          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_SelfContained_Setup
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesInstallIn64BitMode=x64compatible
+          PrivilegesRequired=admin
+          Uninstallable=yes
+          WizardStyle=modern
+
+          [Files]
+          Source: "dist\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
+
+          [Run]
+          Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -LiteralPath 'installer.iss' -Encoding utf8
+
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) { throw "Inno Setup compiler not found: $iscc" }
+          & $iscc 'installer.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Compressed installer build failed.' }
+
+          $installer = Join-Path $PWD 'installer\KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe'
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            throw 'Self-contained installer was not produced.'
+          }
+          Write-Host ("Installer size: {0:N2} MB" -f ((Get-Item -LiteralPath $installer).Length / 1MB))
+          Write-Host ("Installer SHA256: {0}" -f (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash)
+
+      - name: Create checksums and upload installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = 'installer\KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe'
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          "SHA256  KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe  $hash" |
+            Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
+
+      - name: Upload self-contained installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAFIA_NET_CONTROL_PRO-SelfContained-Installer-Optimized
+          path: |
+            installer/KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe
+            installer/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
