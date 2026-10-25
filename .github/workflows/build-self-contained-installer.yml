@@ -103,7 +103,7 @@ jobs:
           python "$env:RUNNER_TEMP\validate_app.py"
           if ($LASTEXITCODE -ne 0) { throw 'Application source import validation failed.' }
 
-      - name: Build compact single-file app with embedded Python and required Qt libraries
+      - name: Build compact onedir app with embedded Python and required Qt libraries
         shell: pwsh
         env:
           PYTHONUTF8: '1'
@@ -112,46 +112,48 @@ jobs:
           python -m PyInstaller --clean --noconfirm build_full.spec
           if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
 
-          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO.exe'
+          $bundleDir = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO'
+          $exe = Join-Path $bundleDir 'KAFIA_NET_CONTROL_PRO.exe'
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
             throw "Self-contained app was not produced: $exe"
           }
 
-          $item = Get-Item -LiteralPath $exe
-          if ($item.Length -lt 50MB) {
-            throw "EXE is unexpectedly small ($($item.Length) bytes); refusing to publish a possibly incomplete bundle."
+          $bundleBytes = [double](Get-ChildItem -LiteralPath $bundleDir -File -Recurse | Measure-Object -Property Length -Sum).Sum
+          if ($bundleBytes -lt 50MB) {
+            throw "Bundle is unexpectedly small ($bundleBytes bytes); refusing to publish a possibly incomplete bundle."
           }
 
-          Write-Host "Self-contained EXE: $exe"
-          Write-Host ("Uncompressed size: {0:N2} MB" -f ($item.Length / 1MB))
-          Write-Host ("SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
+          Write-Host "Self-contained app directory: $bundleDir"
+          Write-Host ("Uncompressed bundle size: {0:N2} MB" -f ($bundleBytes / 1MB))
+          Write-Host ("EXE SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
 
       - name: Verify the frozen bundle output
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO.exe'
+          $bundleDir = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO'
+          $exe = Join-Path $bundleDir 'KAFIA_NET_CONTROL_PRO.exe'
 
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
             throw "Self-contained EXE is missing: $exe"
           }
-          $item = Get-Item -LiteralPath $exe
-          if ($item.Length -lt 50MB) {
-            throw "EXE size is unexpectedly small: $($item.Length) bytes"
+          $bundleBytes = [double](Get-ChildItem -LiteralPath $bundleDir -File -Recurse | Measure-Object -Property Length -Sum).Sum
+          if ($bundleBytes -lt 50MB) {
+            throw "Bundle size is unexpectedly small: $bundleBytes bytes"
           }
 
           $spec = Get-Content -LiteralPath 'build_full.spec' -Raw
           if ($spec.Contains('collect_all(')) {
             throw 'Optimized spec must not collect the entire PySide6 distribution.'
           }
-          foreach ($requiredText in @('PySide6.QtQml', 'PySide6.QtQuick', '("qml", "qml")', '("engine", "engine")', '("platform-tools", "platform-tools")')) {
+          foreach ($requiredText in @('COLLECT(', 'PySide6.QtQml', 'PySide6.QtQuick', '("qml", "qml")', '("engine", "engine")', '("platform-tools", "platform-tools")')) {
             if (-not $spec.Contains($requiredText)) {
               throw "PyInstaller spec is missing expected modules or resources: $requiredText"
             }
           }
 
-          Write-Host ("Verified single-file bundle: {0:N2} MB" -f ($item.Length / 1MB))
-          Write-Host ("SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
+          Write-Host ("Verified onedir bundle: {0:N2} MB" -f ($bundleBytes / 1MB))
+          Write-Host ("EXE SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
           Write-Host 'STATIC BUNDLE CHECK: PASS' -ForegroundColor Green
 
       - name: Run frozen Qt startup smoke test
@@ -161,7 +163,7 @@ jobs:
           QT_QUICK_BACKEND: software
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO.exe'
+          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO\KAFIA_NET_CONTROL_PRO.exe'
 
           $psi = New-Object System.Diagnostics.ProcessStartInfo
           $psi.FileName = $exe
@@ -212,7 +214,7 @@ jobs:
           WizardStyle=modern
 
           [Files]
-          Source: "dist\KAFIA_NET_CONTROL_PRO.exe"; DestDir: "{app}"; Flags: ignoreversion
+          Source: "dist\KAFIA_NET_CONTROL_PRO\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
           Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
