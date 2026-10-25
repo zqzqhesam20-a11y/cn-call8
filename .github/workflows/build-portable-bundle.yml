@@ -1,0 +1,159 @@
+name: Build Portable Self-Contained Windows App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-portable-bundle.yml'
+      - 'app_qml.py'
+      - 'build_full.spec'
+      - 'requirements.txt'
+      - 'engine/**'
+      - 'qml/**'
+      - 'assets/**'
+      - 'ui/**'
+      - 'games.json'
+      - 'platform-tools/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-portable:
+    name: Build and verify bundled Windows EXE
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python build environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install application and packaging dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install 'PySide6==6.11.2' 'psutil>=7,<8' pyinstaller
+
+      - name: Validate source and imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $required = @(
+            'app_qml.py',
+            'build_full.spec',
+            'games.json',
+            'qml\main.qml',
+            'engine\adb_engine.py',
+            'engine\transfer_engine.py',
+            'engine\path_manager.py',
+            'engine\game_config.py',
+            'platform-tools\adb.exe',
+            'platform-tools\AdbWinApi.dll',
+            'platform-tools\AdbWinUsbApi.dll'
+          )
+
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Required application file missing: $file"
+            }
+          }
+
+          @'
+          import sys
+          import PySide6
+          import psutil
+          from engine.adb_engine import ADBEngine
+          from engine.transfer_engine import TransferEngine
+          from engine.path_manager import PathManager
+          from engine.game_config import get_game, find_game_folder
+
+          print("Python:", sys.version)
+          print("PySide6:", PySide6.__version__)
+          print("psutil:", psutil.__version__)
+          print("Application module imports: OK")
+          '@ | Set-Content -LiteralPath "$env:RUNNER_TEMP\validate_app.py" -Encoding utf8
+
+          python "$env:RUNNER_TEMP\validate_app.py"
+          if ($LASTEXITCODE -ne 0) { throw 'Application import validation failed.' }
+
+      - name: Build single-file executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m PyInstaller --clean --noconfirm build_full.spec
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
+
+          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Expected self-contained EXE not found: $exe"
+          }
+
+          $item = Get-Item -LiteralPath $exe
+          if ($item.Length -lt 10MB) {
+            throw "Executable is unexpectedly small ($($item.Length) bytes); refusing to package an incomplete build."
+          }
+
+          Write-Host "Built EXE: $exe"
+          Write-Host ("Size: {0:N2} MB" -f ($item.Length / 1MB))
+          Write-Host ("SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
+
+      - name: Assemble portable ZIP and checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO.exe'
+          $stage = Join-Path $PWD 'portable-release'
+          $zip = Join-Path $PWD 'KAFIA_NET_CONTROL_PRO-Portable-Windows-x64.zip'
+
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -LiteralPath $exe -Destination (Join-Path $stage 'KAFIA_NET_CONTROL_PRO.exe')
+
+          @'
+          KAFIA NET CONTROL PRO - Portable Windows x64
+          ============================================
+
+          This is a PyInstaller single-file package. Python runtime, PySide6
+          and application dependencies are bundled into the executable.
+          A separate system-wide Python installation is not required.
+
+          Run:
+            KAFIA_NET_CONTROL_PRO.exe
+
+          Extract this ZIP to a normal local folder before running. Do not
+          run directly inside the ZIP preview. Windows security software may
+          inspect or quarantine executable files; verify the SHA256 below
+          before running and only restore files if you trust their source.
+          '@ | Set-Content -LiteralPath (Join-Path $stage 'README-PORTABLE.txt') -Encoding utf8
+
+          $hash = (Get-FileHash -LiteralPath (Join-Path $stage 'KAFIA_NET_CONTROL_PRO.exe') -Algorithm SHA256).Hash
+          "SHA256  KAFIA_NET_CONTROL_PRO.exe  $hash" |
+            Set-Content -LiteralPath (Join-Path $stage 'SHA256SUMS.txt') -Encoding ascii
+
+          if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+          Compress-Archive -LiteralPath (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) {
+            throw 'Portable ZIP was not created.'
+          }
+          Write-Host "Portable package: $zip"
+          Write-Host ("ZIP size: {0:N2} MB" -f ((Get-Item -LiteralPath $zip).Length / 1MB))
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAFIA_NET_CONTROL_PRO-Portable-Windows-x64
+          path: KAFIA_NET_CONTROL_PRO-Portable-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
