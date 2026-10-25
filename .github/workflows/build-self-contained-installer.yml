@@ -141,7 +141,7 @@ jobs:
           }
 
           $spec = Get-Content -LiteralPath 'build_full.spec' -Raw
-          foreach ($requiredText in @('collect_all("PySide6")', '("qml", "qml")', '("engine", "engine")', '("platform-tools", "platform-tools")')) {
+          foreach ($requiredText in @('for package in ["PySide6"]', '("qml", "qml")', '("engine", "engine")', '("platform-tools", "platform-tools")')) {
             if (-not $spec.Contains($requiredText)) {
               throw "PyInstaller spec is missing expected bundled resources: $requiredText"
             }
