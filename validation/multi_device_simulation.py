@@ -24,7 +24,10 @@ def load_controller():
     module.__file__ = str(ROOT / "app_qml.py")
     sys.modules["app_qml"] = module
     source = Path(module.__file__).read_text(encoding="utf-8")
-    source = source[:source.index('\nprint("STARTING KAFIA NET CONTROL PRO")')]
+    marker = "\ndef main():"
+    if marker not in source:
+        raise AssertionError("Could not locate app_qml main entry marker.")
+    source = source.split(marker, 1)[0]
     exec(compile(source, module.__file__, "exec"), module.__dict__)
     return module
 
@@ -654,7 +657,7 @@ def test_paths_and_ui():
     assert "if (appController.useWirelessSource())" in qml
     assert "if (appController.useUsbSource())" in qml
 
-    # Shipping launchers must avoid CMD codepage corruption for Arabic UNC components.
+    # Shipping launchers must use the local Python runtime and stay ASCII-only.
     launcher = Path("Start-KAFIANET-CONTROL-PRO.cmd").read_text(encoding="utf-8")
     assert all(ord(char) < 128 for char in launcher)
     assert "Launch-KAFIA-NET-CONTROL-PRO.vbs" in launcher
@@ -668,16 +671,15 @@ def test_paths_and_ui():
         encoding="utf-8"
     )
     assert all(ord(char) < 128 for char in external_launcher)
-    assert "SERVER06\\c$" in external_launcher
-    assert "0x0639" in external_launcher
-    assert "0x062E" in external_launcher
+    assert "D:\\games\\py" in external_launcher
+    assert "SERVER06\\c$" not in external_launcher
     assert "PYTHONHOME" in external_launcher
     assert "PYTHONPATH" in external_launcher
     assert "--qt-import-smoke-test" in external_launcher
-    assert "kafianet_external_runtime.py" in external_launcher
+    assert "kafianet_external_runtime*.pyd" in external_launcher
     # The VBS hides PowerShell itself; the Qt app process must not be
     # created with a hidden window style or the desktop launch may appear blank.
-    assert "& $pythonExe $bootstrap" in external_launcher
+    assert "& $pythonExe -c $bootstrapCommand" in external_launcher
     assert "$appProcess = Start-Process -FilePath $pythonExe" not in external_launcher
     assert "Start-Process -FilePath $pythonExe" not in external_launcher
     assert "-WindowStyle Hidden" not in external_launcher
@@ -687,11 +689,12 @@ def test_paths_and_ui():
     assert "vc_redist" not in external_launcher
 
     bootstrap = Path("kafianet_external_runtime.py").read_text(encoding="utf-8")
-    runtime_root = r"\\SERVER06\c$\العابي\222\66\الاخييير\py"
+    runtime_root = 'Path(r"D:\\games\\py")'
     assert runtime_root in bootstrap
+    assert "SERVER06\\c$" not in bootstrap
     assert "os.add_dll_directory" in bootstrap
     assert "QT_QPA_PLATFORM_PLUGIN_PATH" in bootstrap
-    assert "runpy.run_path" in bootstrap
+    assert 'importlib.import_module("app_qml")' in bootstrap
     assert "from PySide6.QtWidgets import QApplication" in current
     assert "QTWIDGETS_QAPPLICATION_SMOKE_TEST: PASS" in current
     assert "pyside_parts < (6, 10, 1)" in current
@@ -706,7 +709,7 @@ def test_paths_and_ui():
         assert "PyInstaller" not in workflow
         assert "https://aka.ms/vc14/vc_redist.x64.exe" not in workflow
         assert "python314.dll" not in workflow
-        assert "Forbidden runtime file" in workflow
+        assert "build-protected-package.ps1" in workflow
 
 
 def run_once():

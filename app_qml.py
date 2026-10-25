@@ -14,7 +14,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 os.environ["QT_QUICK_CONTROLS_STYLE"] = "Fusion"
 
-from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, Property, QTimer, QUrl
 from PySide6.QtWidgets import QApplication
 from PySide6.QtQml import QQmlApplicationEngine
 
@@ -1449,51 +1449,41 @@ class AppController(QObject):
             engine.cancel()
 
 
-print("STARTING KAFIA NET CONTROL PRO")
+def main():
+    print("STARTING KAFIA NET CONTROL PRO")
 
-app = QApplication(sys.argv)
+    app = QApplication(sys.argv)
+    engine = QQmlApplicationEngine()
 
-engine = QQmlApplicationEngine()
+    try:
+        import ui_resources_rc
+        qml_entry = QUrl("qrc:/qml/main.qml")
+        print("LOADING EMBEDDED QML:", qml_entry.toString())
+    except ImportError:
+        qml_entry = QUrl.fromLocalFile(str(BASE_DIR / "qml" / "main.qml"))
+        print("LOADING SOURCE QML:", qml_entry.toString())
 
-controller = AppController()
+    controller = AppController()
+    engine.rootContext().setContextProperty("appController", controller)
+    engine.rootContext().setContextProperty("baseDirectory", str(BASE_DIR))
+    engine.load(qml_entry)
 
-engine.rootContext().setContextProperty(
-    "appController",
-    controller
-)
+    root_count = len(engine.rootObjects())
+    print("ROOT OBJECTS:", root_count)
+    if not root_count:
+        print("QML FAILED TO LOAD")
+        return 2
 
-engine.rootContext().setContextProperty(
-    "baseDirectory",
-    str(BASE_DIR)
-)
+    print("QML LOADED SUCCESSFULLY")
+    if "--protected-build-smoke-test" in sys.argv:
+        print("PROTECTED_BUILD_SMOKE_TEST: PASS")
+        return 0
 
-qml_file = BASE_DIR / "qml" / "main.qml"
+    print("STARTING QT EVENT LOOP")
+    exit_code = app.exec()
+    print("QT EVENT LOOP ENDED:", exit_code)
+    return exit_code
 
-print("LOADING:", qml_file)
 
-engine.load(
-    str(qml_file)
-)
-
-print(
-    "ROOT OBJECTS:",
-    len(engine.rootObjects())
-)
-
-if not engine.rootObjects():
-
-    print("QML FAILED TO LOAD")
-
-    sys.exit(-1)
-
-print("QML LOADED SUCCESSFULLY")
-print("STARTING QT EVENT LOOP")
-
-exit_code = app.exec()
-
-print(
-    "QT EVENT LOOP ENDED:",
-    exit_code
-)
-
-sys.exit(exit_code)
+if __name__ == "__main__":
+    raise SystemExit(main())

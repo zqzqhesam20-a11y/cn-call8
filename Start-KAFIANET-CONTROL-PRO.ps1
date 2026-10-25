@@ -1,16 +1,14 @@
 $ErrorActionPreference = "Stop"
 
-# Keep this source ASCII-only. Construct Arabic folder names by Unicode code points
-# so Windows PowerShell 5.1 never has to decode Arabic bytes from this script.
-$gameLibrary = -join ([char[]]@(0x0627, 0x0644, 0x0639, 0x0627, 0x0628, 0x064A))
-$releaseFolder = -join ([char[]]@(0x0627, 0x0644, 0x0627, 0x062E, 0x064A, 0x064A, 0x064A, 0x0631))
-$pythonRoot = "\\SERVER06\c$\{0}\222\66\{1}\py" -f $gameLibrary, $releaseFolder
+# Python and the Qt runtime were moved to the local drive.
+$pythonRoot = "D:\games\py"
 $pythonExe = Join-Path -Path $pythonRoot -ChildPath "python.exe"
 $libRoot = Join-Path -Path $pythonRoot -ChildPath "Lib"
 $dllRoot = Join-Path -Path $pythonRoot -ChildPath "DLLs"
 $appRoot = $PSScriptRoot
 $sitePackages = Join-Path -Path $libRoot -ChildPath "site-packages"
-$bootstrap = Join-Path -Path $appRoot -ChildPath "kafianet_external_runtime.py"
+$runtimeModule = Get-ChildItem -LiteralPath $appRoot -File -Filter "kafianet_external_runtime*.pyd" |
+    Select-Object -First 1
 
 function Stop-KafiaLauncher([int]$Code, [string]$Message) {
     $fullMessage = "[KAFIA NET CONTROL PRO] $Message"
@@ -24,19 +22,18 @@ function Stop-KafiaLauncher([int]$Code, [string]$Message) {
 }
 
 if (-not (Test-Path -LiteralPath $pythonExe -PathType Leaf)) {
-    Stop-KafiaLauncher 10 "Python runtime was not found on SERVER06. Confirm the server is online and this Windows account can access C$."
+    Stop-KafiaLauncher 10 "Python runtime was not found at D:\games\py. Confirm the local runtime folder is complete."
 }
 if (-not (Test-Path -LiteralPath $libRoot -PathType Container)) {
-    Stop-KafiaLauncher 11 "The external Python Lib folder is missing."
+    Stop-KafiaLauncher 11 "The local Python Lib folder is missing."
 }
 if (-not (Test-Path -LiteralPath $dllRoot -PathType Container)) {
-    Stop-KafiaLauncher 11 "The external Python DLLs folder is missing."
+    Stop-KafiaLauncher 11 "The local Python DLLs folder is missing."
 }
-if (-not (Test-Path -LiteralPath $bootstrap -PathType Leaf)) {
-    Stop-KafiaLauncher 13 "kafianet_external_runtime.py is missing from the application folder."
+if (-not $runtimeModule) {
+    Stop-KafiaLauncher 13 "The compiled application runtime module is missing."
 }
 
-# Use the external runtime only. No runtime download, installation, or copy occurs.
 $env:PYTHONHOME = $pythonRoot
 $env:PYTHONUTF8 = "1"
 $pythonPathItems = @($appRoot, $sitePackages, $env:PYTHONPATH) |
@@ -54,11 +51,12 @@ $pathItems = @(
 ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 $env:PATH = $pathItems -join ";"
 
-# Preflight QtWidgets and QApplication before showing the real interface.
+$bootstrapCommand = "import kafianet_external_runtime; raise SystemExit(kafianet_external_runtime.main())"
+
 $hadQpaPlatform = Test-Path Env:QT_QPA_PLATFORM
 $previousQpaPlatform = $env:QT_QPA_PLATFORM
 $env:QT_QPA_PLATFORM = "offscreen"
-& $pythonExe $bootstrap --qt-import-smoke-test
+& $pythonExe -c $bootstrapCommand --qt-import-smoke-test
 $smokeExitCode = $LASTEXITCODE
 if ($hadQpaPlatform) {
     $env:QT_QPA_PLATFORM = $previousQpaPlatform
@@ -66,17 +64,13 @@ if ($hadQpaPlatform) {
     Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
 }
 if ($smokeExitCode -ne 0) {
-    Stop-KafiaLauncher 12 "Qt startup preflight failed. Check compatible PySide6, Qt DLLs and plugins in the external Python environment."
+    Stop-KafiaLauncher 12 "Qt startup preflight failed. Check the Python 3.14 x64 runtime, PySide6 and Qt DLLs."
 }
 
-# The PowerShell host itself is already hidden by the VBS launcher.
-# Do not start python.exe with a hidden show state: that can hide the Qt
-# top-level window as well. Run it in this hidden host so QApplication can
-# show the actual application window normally.
 $previousLocation = Get-Location
 try {
     Set-Location -LiteralPath $appRoot
-    & $pythonExe $bootstrap
+    & $pythonExe -c $bootstrapCommand
     $appExitCode = $LASTEXITCODE
 } catch {
     Stop-KafiaLauncher 14 ("Unable to launch the application: " + $_.Exception.Message)
