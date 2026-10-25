@@ -701,15 +701,35 @@ def test_paths_and_ui():
     requirements = Path("requirements.txt").read_text(encoding="utf-8")
     assert "PySide6>=6.10.1,<7" in requirements
 
-    for workflow_path in (
-        Path(".github/workflows/build-windows.yml"),
-        Path(".github/workflows/build-windows-runtime.yml"),
+    workflow = Path(
+        ".github/workflows/build-self-contained-installer.yml"
+    ).read_text(encoding="utf-8")
+    spec = Path("build_full.spec").read_text(encoding="utf-8")
+
+    # Only the self-contained installer workflow publishes a release build.
+    assert "PyInstaller" in workflow
+    assert "pyside6-rcc" in workflow
+    assert "ui_resources_rc" in workflow
+    assert "python314.dll" in workflow
+    assert "Qt6Core.dll" in workflow
+    assert "--protected-build-smoke-test" in workflow
+    assert "KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe" in workflow
+    assert "D:\\games\\py" not in workflow
+
+    # Loose application sources are embedded instead of copied as data.
+    assert '"ui_resources_rc"' in spec
+    assert '("platform-tools", "platform-tools")' in spec
+    for loose_source_entry in (
+        '("qml", "qml")',
+        '("engine", "engine")',
+        '("ui", "ui")',
+        '("assets", "assets")',
+        '("games.json", ".")',
     ):
-        workflow = workflow_path.read_text(encoding="utf-8")
-        assert "PyInstaller" not in workflow
-        assert "https://aka.ms/vc14/vc_redist.x64.exe" not in workflow
-        assert "python314.dll" not in workflow
-        assert "build-protected-package.ps1" in workflow
+        assert loose_source_entry not in spec
+
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "does not use" in readme and "Python runtime" in readme
 
 
 def run_once():
