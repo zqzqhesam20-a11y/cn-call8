@@ -1,0 +1,222 @@
+name: Build Self-Contained Windows Installer
+
+on:
+  push:
+    branches:
+      - fix/path-lifecycle-20261023
+    paths:
+      - '.github/workflows/build-self-contained-installer.yml'
+      - 'app_qml.py'
+      - 'build_full.spec'
+      - 'requirements.txt'
+      - 'engine/**'
+      - 'qml/**'
+      - 'assets/**'
+      - 'ui/**'
+      - 'games.json'
+      - 'platform-tools/**'
+      - 'validation/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, smoke-test and compress bundled app
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14 x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install 'PySide6==6.11.2' 'psutil>=7,<8' pyinstaller
+          if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed.' }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw 'Build environment has broken dependencies.' }
+
+      - name: Run branch regression simulation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python validation\multi_device_simulation.py
+          if ($LASTEXITCODE -ne 0) { throw 'Branch regression simulation failed.' }
+
+      - name: Validate app source imports
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $required = @(
+            'app_qml.py',
+            'build_full.spec',
+            'games.json',
+            'qml\main.qml',
+            'engine\adb_engine.py',
+            'engine\transfer_engine.py',
+            'engine\path_manager.py',
+            'engine\game_config.py',
+            'platform-tools\adb.exe',
+            'platform-tools\AdbWinApi.dll',
+            'platform-tools\AdbWinUsbApi.dll'
+          )
+          foreach ($file in $required) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
+              throw "Required app file missing: $file"
+            }
+          }
+
+          @'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path.cwd()))
+          import PySide6, psutil
+          from engine.adb_engine import ADBEngine
+          from engine.transfer_engine import TransferEngine
+          from engine.path_manager import PathManager
+          from engine.game_config import get_game, find_game_folder
+          print("Python:", sys.version)
+          print("PySide6:", PySide6.__version__)
+          print("psutil:", psutil.__version__)
+          print("Application module imports: OK")
+          '@ | Set-Content -LiteralPath "$env:RUNNER_TEMP\validate_app.py" -Encoding utf8
+
+          python "$env:RUNNER_TEMP\validate_app.py"
+          if ($LASTEXITCODE -ne 0) { throw 'Application source import validation failed.' }
+
+      - name: Build single-file app with embedded Python and libraries
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m PyInstaller --clean --noconfirm build_full.spec
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
+
+          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Self-contained app was not produced: $exe"
+          }
+
+          $item = Get-Item -LiteralPath $exe
+          if ($item.Length -lt 100MB) {
+            throw "EXE is unexpectedly small ($($item.Length) bytes); refusing to publish a possibly incomplete bundle."
+          }
+
+          Write-Host "Self-contained EXE: $exe"
+          Write-Host ("Uncompressed size: {0:N2} MB" -f ($item.Length / 1MB))
+          Write-Host ("SHA256: {0}" -f (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash)
+
+      - name: Smoke-test Qt and embedded QML from the frozen EXE
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_CONTROLS_STYLE: Fusion
+          PYTHONUTF8: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $PWD 'dist\KAFIA_NET_CONTROL_PRO.exe'
+
+          Write-Host 'Smoke test 1/2: QApplication and Qt platform plugins...'
+          $p1 = Start-Process -FilePath $exe -ArgumentList '--qt-import-smoke-test' -Wait -PassThru -WindowStyle Hidden
+          if ($p1.ExitCode -ne 0) {
+            throw "Frozen Qt import smoke test failed with exit code $($p1.ExitCode)."
+          }
+
+          Write-Host 'Smoke test 2/2: application and QML load...'
+          $p2 = Start-Process -FilePath $exe -ArgumentList '--protected-build-smoke-test' -Wait -PassThru -WindowStyle Hidden
+          if ($p2.ExitCode -ne 0) {
+            throw "Frozen QML smoke test failed with exit code $($p2.ExitCode)."
+          }
+          Write-Host 'FROZEN QT AND QML SMOKE TESTS: PASS' -ForegroundColor Green
+
+      - name: Install Inno Setup for high-compression installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install innosetup --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+
+      - name: Build compressed self-contained installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path installer | Out-Null
+
+          @'
+          [Setup]
+          AppId={{DCE1D2AB-50A0-49A0-9ED1-8DA445E54C91}
+          AppName=KAFIA NET CONTROL PRO
+          AppVersion=1.3.0
+          AppPublisher=KAFIA NET CONTROL PRO
+          DefaultDirName={autopf}\KAFIA NET CONTROL PRO
+          DefaultGroupName=KAFIA NET CONTROL PRO
+          OutputDir=installer
+          OutputBaseFilename=KAFIA_NET_CONTROL_PRO_SelfContained_Setup
+          Compression=lzma2/ultra64
+          SolidCompression=yes
+          ArchitecturesInstallIn64BitMode=x64compatible
+          PrivilegesRequired=admin
+          Uninstallable=yes
+          WizardStyle=modern
+
+          [Files]
+          Source: "dist\KAFIA_NET_CONTROL_PRO.exe"; DestDir: "{app}"; Flags: ignoreversion
+
+          [Icons]
+          Name: "{autodesktop}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
+          Name: "{group}\KAFIA NET CONTROL PRO"; Filename: "{app}\KAFIA_NET_CONTROL_PRO.exe"
+
+          [Run]
+          Filename: "{app}\KAFIA NET CONTROL PRO.exe"; Description: "تشغيل KAFIA NET CONTROL PRO"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -LiteralPath 'installer.iss' -Encoding utf8
+
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $iscc)) { throw "Inno Setup compiler not found: $iscc" }
+          & $iscc 'installer.iss'
+          if ($LASTEXITCODE -ne 0) { throw 'Compressed installer build failed.' }
+
+          $installer = Join-Path $PWD 'installer\KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe'
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            throw 'Self-contained installer was not produced.'
+          }
+          Write-Host ("Installer size: {0:N2} MB" -f ((Get-Item -LiteralPath $installer).Length / 1MB))
+          Write-Host ("Installer SHA256: {0}" -f (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash)
+
+      - name: Create checksums and upload installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = 'installer\KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe'
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          "SHA256  KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe  $hash" |
+            Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
+
+      - name: Upload self-contained installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAFIA_NET_CONTROL_PRO-SelfContained-Installer
+          path: |
+            installer/KAFIA_NET_CONTROL_PRO_SelfContained_Setup.exe
+            installer/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
